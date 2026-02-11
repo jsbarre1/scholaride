@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>ScholarIDE</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:;"
+    />
+    <script>
+      // Polyfills for Node.js globals in renderer process
+      if (typeof global === "undefined") {
+        window.global = window;
+      }
+      if (typeof process === "undefined") {
+        window.process = { env: {} };
+      }
+      if (typeof __dirname === "undefined") {
+        window.__dirname = "/";
+      }
+      if (typeof __filename === "undefined") {
+        window.__filename = "/index.html";
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
