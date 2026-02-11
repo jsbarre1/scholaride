@@ -1,6 +1,6 @@
-import { Configuration, ProvidePlugin } from "webpack";
+import { Configuration, ProvidePlugin, DefinePlugin } from "webpack";
 
-import { rules } from "./webpack.rules";
+import { rendererRules as rules } from "./webpack.rules";
 import { plugins } from "./webpack.plugins";
 import MonacoWebpackPlugin from "monaco-editor-webpack-plugin";
 
@@ -30,6 +30,10 @@ export const rendererConfig: Configuration = {
       process: "process/browser",
       Buffer: ["buffer", "Buffer"],
     }),
+    new DefinePlugin({
+      __dirname: JSON.stringify("/"),
+      __filename: JSON.stringify("/index.html"),
+    }),
   ],
   resolve: {
     extensions: [".js", ".ts", ".jsx", ".tsx", ".css"],
@@ -38,5 +42,8 @@ export const rendererConfig: Configuration = {
       fs: false,
       process: require.resolve("process/browser"),
     },
+  },
+  node: {
+    __dirname: true,
   },
 };

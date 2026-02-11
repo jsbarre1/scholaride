@@ -1,6 +1,6 @@
 import type { Configuration } from "webpack";
 
-import { rules } from "./webpack.rules";
+import { mainRules as rules } from "./webpack.rules";
 import { plugins } from "./webpack.plugins";
 
 export const mainConfig: Configuration = {
@@ -19,5 +19,9 @@ export const mainConfig: Configuration = {
   },
   externals: {
     "node-pty": "commonjs node-pty",
+  },
+  node: {
+    __dirname: false,
+    __filename: false,
   },
 };
