@@ -12,7 +12,12 @@ import StatusBar from './components/StatusBar';
 import EditorArea from './components/EditorArea';
 import { ElectronAPI } from './types/index';
 
-loader.config({ monaco });
+loader.config({
+    monaco,
+    paths: {
+        vs: 'monaco-editor/min/vs'
+    }
+});
 
 const App: React.FC = () => {
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -35,8 +40,8 @@ const App: React.FC = () => {
     const handleFileSelect = async (filePath: string) => {
         try {
             const content = await window.electronAPI.readFile(filePath);
-            setSelectedFile(filePath);
             setFileContent(content);
+            setSelectedFile(filePath);
             setIsDirty(false);
 
             const ext = filePath.split('.').pop();

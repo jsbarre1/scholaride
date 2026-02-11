@@ -3,6 +3,7 @@ import { Tree, NodeRendererProps } from 'react-arborist';
 import {
     VscFolder,
     VscNewFile,
+    VscNewFolder,
     VscRefresh,
     VscChevronRight,
     VscChevronDown,
@@ -29,10 +30,48 @@ interface FileExplorerProps {
 }
 
 const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, rootPath, onRefreshRequested, onOpenFolder }) => {
+
     const [data, setData] = useState<TreeData[]>([]);
     const [isCreating, setIsCreating] = useState(false);
     const [newFileName, setNewFileName] = useState('');
     const treeRef = useRef<any>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+    const [creationType, setCreationType] = useState<'file' | 'directory'>('file');
+    const [lastExpandedPath, setLastExpandedPath] = useState<string | null>(null);
+
+    useEffect(() => {
+        setLastExpandedPath(rootPath);
+    }, [rootPath]);
+
+    useEffect(() => {
+        const handleClickOutside = () => setContextMenu(null);
+        window.addEventListener('click', handleClickOutside);
+        return () => window.removeEventListener('click', handleClickOutside);
+    }, []);
+
+    useEffect(() => {
+        // Listen for file system changes from the main process
+        const removeListener = window.electronAPI.onFileSystemChanged(async (eventType, filename) => {
+            console.log('File system changed:', eventType, filename);
+            // Ideally we'd be smarter here, but for now, let's just refresh the view.
+            // A full refresh is safest to ensure alignment.
+            if (rootPath) {
+                const rootEntries = await loadDirectory(rootPath);
+                setData(rootEntries);
+
+                // If we had a subfolder expanded, we might want to try to preserve that state
+                // Use a recursive reload approach if we wanted to be perfect, but top-level refresh is a good start.
+                // If lastExpandedPath is set, we could try to reload that too.
+                if (lastExpandedPath && lastExpandedPath !== rootPath) {
+                    const children = await loadDirectory(lastExpandedPath);
+                    setData(prevData => updateNodeChildren(prevData, lastExpandedPath, children));
+                }
+            }
+        });
+        return () => {
+            removeListener();
+        };
+    }, [rootPath, lastExpandedPath]); // Re-bind if paths change so we have latest closures
 
     const loadDirectory = async (dirPath: string): Promise<TreeData[]> => {
         if (!dirPath) return [];
@@ -68,6 +107,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
     const handleToggle = async (id: string) => {
         const isOpen = treeRef.current?.isOpen(id);
         if (isOpen) {
+            setLastExpandedPath(id);
             const node = findNode(data, id);
             if (node && node.isDirectory && (!node.children || node.children.length === 0)) {
                 const children = await loadDirectory(id);
@@ -99,20 +139,45 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
         });
     };
 
-    const handleCreateFile = async () => {
+    const handleCreate = async () => {
         if (!newFileName) {
             setIsCreating(false);
             return;
         }
         try {
-            const fullPath = `${rootPath}/${newFileName}`;
-            await window.electronAPI.createFile(fullPath);
+            const basePath = lastExpandedPath || rootPath;
+            const fullPath = `${basePath}/${newFileName}`;
+            if (creationType === 'file') {
+                await window.electronAPI.createFile(fullPath);
+            } else {
+                await window.electronAPI.createDirectory(fullPath);
+            }
+
             setNewFileName('');
             setIsCreating(false);
+
+            // If we created in a subfolder, we should reload that folder
+            if (basePath === rootPath) {
+                const rootEntries = await loadDirectory(rootPath);
+                setData(rootEntries);
+            } else {
+                const children = await loadDirectory(basePath);
+                setData(prevData => updateNodeChildren(prevData, basePath, children));
+            }
+
+        } catch (error) {
+            console.error('Failed to create item:', error);
+        }
+    };
+
+    const handleDelete = async (path: string) => {
+        try {
+            await window.electronAPI.deletePath(path);
+            // Refresh parent or root
             const rootEntries = await loadDirectory(rootPath);
             setData(rootEntries);
         } catch (error) {
-            console.error('Failed to create file:', error);
+            console.error('Failed to delete item:', error);
         }
     };
 
@@ -120,6 +185,12 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
         if (!rootPath) return 'SCHOLARIDE';
         const parts = rootPath.split(/[/\\]/);
         return parts[parts.length - 1].toUpperCase();
+    };
+
+    const handleContextMenu = (e: React.MouseEvent, path: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu({ x: e.clientX, y: e.clientY, path });
     };
 
     const Node = ({ node, style, dragHandle }: NodeRendererProps<TreeData>) => {
@@ -147,6 +218,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                         onFileSelect(node.id);
                     }
                 }}
+                onContextMenu={(e) => handleContextMenu(e, node.id)}
                 ref={dragHandle}
             >
                 <div style={{ paddingLeft: `${node.level * 12}px`, display: 'flex', alignItems: 'center' }}>
@@ -175,7 +247,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
             background: 'var(--vscode-sidebar-bg)',
             color: 'var(--vscode-text)',
             display: 'flex',
-            flexDirection: 'column'
+            flexDirection: 'column',
+            position: 'relative'
         }}>
             <div style={{
                 padding: '10px 20px',
@@ -186,21 +259,20 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                 flexShrink: 0
             }}>
                 <span style={{ fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', color: '#bbbbbb' }}>Explorer</span>
-                <div style={{ display: 'flex', gap: '2px' }}>
+                <div style={{ display: 'flex', gap: '4px' }}>
                     <button
-                        onClick={() => setIsCreating(true)}
+                        onClick={() => { setIsCreating(true); setCreationType('file'); }}
                         title="New File"
-                        style={{
-                            background: 'none',
-                            border: 'none',
-                            color: '#ccc',
-                            cursor: 'pointer',
-                            padding: '2px 5px',
-                            display: 'flex',
-                            alignItems: 'center'
-                        }}
+                        style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', padding: '2px', display: 'flex' }}
                     >
                         <VscNewFile size={16} />
+                    </button>
+                    <button
+                        onClick={() => { setIsCreating(true); setCreationType('directory'); }}
+                        title="New Folder"
+                        style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', padding: '2px', display: 'flex' }}
+                    >
+                        <VscNewFolder size={16} />
                     </button>
                     <button
                         onClick={async () => {
@@ -210,15 +282,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                             }
                         }}
                         title="Refresh"
-                        style={{
-                            background: 'none',
-                            border: 'none',
-                            color: '#ccc',
-                            cursor: 'pointer',
-                            padding: '2px 5px',
-                            display: 'flex',
-                            alignItems: 'center'
-                        }}
+                        style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', padding: '2px', display: 'flex' }}
                     >
                         <VscRefresh size={16} />
                     </button>
@@ -272,16 +336,22 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                         </div>
                     </div>
 
-                    <div style={{ flex: 1, minHeight: 0 }}>
+                    <div style={{ flex: 1, minHeight: 0 }} onClick={() => setContextMenu(null)}>
                         {isCreating && (
                             <div style={{ padding: '3px 20px 3px 30px', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-                                <VscFile size={16} style={{ marginRight: '8px', opacity: 0.8 }} />
+                                {creationType === 'directory' ?
+                                    <VscFolder size={16} style={{ marginRight: '8px', opacity: 0.8 }} /> :
+                                    <VscFile size={16} style={{ marginRight: '8px', opacity: 0.8 }} />
+                                }
                                 <input
                                     autoFocus
                                     value={newFileName}
                                     onChange={(e) => setNewFileName(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleCreateFile()}
-                                    onBlur={handleCreateFile}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleCreate();
+                                        if (e.key === 'Escape') setIsCreating(false);
+                                    }}
+                                    onBlur={handleCreate}
                                     style={{
                                         width: '100%',
                                         background: '#3c3c3c',
@@ -291,6 +361,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                                         outline: 'none',
                                         fontSize: '12px'
                                     }}
+                                    placeholder={`${creationType === 'directory' ? 'Folder Name' : 'File Name'} in ${(lastExpandedPath || rootPath || '').split(/[/\\]/).pop()}`}
                                 />
                             </div>
                         )}
@@ -308,6 +379,34 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                             {Node}
                         </Tree>
                     </div>
+
+                    {/* Context Menu */}
+                    {contextMenu && (
+                        <div style={{
+                            position: 'fixed',
+                            top: contextMenu.y,
+                            left: contextMenu.x,
+                            background: '#252526',
+                            border: '1px solid #454545',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                            padding: '4px 0',
+                            zIndex: 1000,
+                            minWidth: '150px'
+                        }}>
+                            <div
+                                style={{ padding: '4px 12px', fontSize: '13px', cursor: 'pointer', color: '#cccccc', display: 'flex', alignItems: 'center' }}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDelete(contextMenu.path);
+                                    setContextMenu(null);
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#094771'}
+                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                            >
+                                <span style={{ marginRight: '8px' }}>🗑️</span> Delete
+                            </div>
+                        </div>
+                    )}
                 </>
             )}
         </div>

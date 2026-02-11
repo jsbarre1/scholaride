@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import * as fs from "fs/promises";
+import * as fsSync from "fs";
 import * as path from "path";
 import * as pty from "node-pty";
 import * as os from "os";
@@ -36,6 +37,7 @@ const createWindow = (): void => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webSecurity: process.env.NODE_ENV === "production" ? true : false,
     },
   });
 
@@ -207,9 +209,78 @@ ipcMain.handle("create-file", async (event, filePath) => {
   }
 });
 
+ipcMain.handle("create-directory", async (event, dirPath) => {
+  const absolutePath = path.isAbsolute(dirPath)
+    ? dirPath
+    : path.join(app.getAppPath(), dirPath);
+  try {
+    await fs.mkdir(absolutePath, { recursive: true });
+    return true;
+  } catch (error) {
+    console.error("Error creating directory:", error);
+    throw error;
+  }
+});
+
+ipcMain.handle("delete-path", async (event, targetPath) => {
+  const { shell } = require("electron");
+  const absolutePath = path.isAbsolute(targetPath)
+    ? targetPath
+    : path.join(app.getAppPath(), targetPath);
+  try {
+    await shell.trashItem(absolutePath);
+    return true;
+  } catch (error) {
+    console.error("Error deleting path:", error);
+    throw error;
+  }
+});
+
 ipcMain.handle("get-app-path", () => {
   return app.getAppPath();
 });
+
+let currentWatcher: fsSync.FSWatcher | null = null;
+const startWatching = (dirPath: string) => {
+  if (currentWatcher) {
+    currentWatcher.close();
+    currentWatcher = null;
+  }
+  try {
+    // Recursive watching is supported on macOS and Windows (mostly)
+    currentWatcher = fsSync.watch(
+      dirPath,
+      { recursive: true },
+      (eventType, filename) => {
+        const ignored = [
+          "node_modules",
+          ".git",
+          ".DS_Store",
+          ".webpack",
+          ".cache",
+          "dist",
+          "out",
+          "build",
+          "coverage",
+          "Thumbs.db", // Windows
+        ];
+
+        if (filename && ignored.some((ignore) => filename.includes(ignore))) {
+          return;
+        }
+
+        if (mainWindow) {
+          mainWindow.webContents.send("file-system-changed", {
+            eventType,
+            filename,
+          });
+        }
+      },
+    );
+  } catch (error) {
+    console.error("Failed to start watcher:", error);
+  }
+};
 
 ipcMain.handle("open-directory", async () => {
   const { dialog } = require("electron");
@@ -217,7 +288,9 @@ ipcMain.handle("open-directory", async () => {
     properties: ["openDirectory"],
   });
   if (result.canceled) return null;
-  return result.filePaths[0];
+  const dirPath = result.filePaths[0];
+  startWatching(dirPath);
+  return dirPath;
 });
 
 // This method will be called when Electron has finished

@@ -8,19 +8,12 @@
       content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:;"
     />
     <script>
-      // Polyfills for Node.js globals in renderer process
-      if (typeof global === "undefined") {
-        window.global = window;
-      }
-      if (typeof process === "undefined") {
-        window.process = { env: {} };
-      }
-      if (typeof __dirname === "undefined") {
-        window.__dirname = "/";
-      }
-      if (typeof __filename === "undefined") {
-        window.__filename = "/index.html";
-      }
+      // Polyfills for Node.js globals in renderer process and workers
+      var global = global || self || window;
+      global.process = global.process || { env: {} };
+      global.__dirname = global.__dirname || "/";
+      global.__filename = global.__filename || "/index.html";
+      global.global = global;
     </script>
   </head>
   <body>

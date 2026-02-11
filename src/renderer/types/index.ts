@@ -16,6 +16,11 @@ export interface ElectronAPI {
   sendTerminalInput: (data: string) => void;
   resizeTerminal: (cols: number, rows: number) => void;
   setTerminalCwd: (cwd: string) => void;
+  createDirectory: (path: string) => Promise<boolean>;
+  deletePath: (path: string) => Promise<boolean>;
+  onFileSystemChanged: (
+    callback: (eventType: string, filename: string) => void,
+  ) => () => void;
 }
 declare global {
   interface Window {

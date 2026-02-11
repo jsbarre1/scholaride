@@ -22,4 +22,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   resizeTerminal: (cols: number, rows: number) =>
     ipcRenderer.send("terminal-resize", { cols, rows }),
   setTerminalCwd: (cwd: string) => ipcRenderer.send("terminal-set-cwd", cwd),
+  createDirectory: (path: string) =>
+    ipcRenderer.invoke("create-directory", path),
+  deletePath: (path: string) => ipcRenderer.invoke("delete-path", path),
+  onFileSystemChanged: (
+    callback: (eventType: string, filename: string) => void,
+  ) => {
+    const listener = (
+      _event: any,
+      { eventType, filename }: { eventType: string; filename: string },
+    ) => callback(eventType, filename);
+    ipcRenderer.on("file-system-changed", listener);
+    return () => ipcRenderer.removeListener("file-system-changed", listener);
+  },
 });
