@@ -51,4 +51,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.send("file-opened", filePath),
   notifyFileClosed: (filePath: string) =>
     ipcRenderer.send("file-closed", filePath),
+  aiChat: (messages: any[]) => ipcRenderer.invoke("ai-chat", { messages }),
 });

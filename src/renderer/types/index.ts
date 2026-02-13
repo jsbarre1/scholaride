@@ -27,6 +27,7 @@ export interface ElectronAPI {
   ) => () => void;
   notifyFileOpened: (filePath: string) => void;
   notifyFileClosed: (filePath: string) => void;
+  aiChat: (messages: any[]) => Promise<any>;
 }
 declare global {
   interface Window {

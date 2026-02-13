@@ -34,7 +34,7 @@ const TitleBar = ({ selectedFile, onAiToggle, isAiActive }: TitleBarProps) => {
                 <div
                     onClick={onAiToggle}
                     style={{
-                        WebkitAppRegion: 'no-drag',
+                        ['WebkitAppRegion' as any]: 'no-drag',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
@@ -47,11 +47,11 @@ const TitleBar = ({ selectedFile, onAiToggle, isAiActive }: TitleBarProps) => {
                         fontWeight: '500',
                         transition: 'all 0.2s',
                         border: '1px solid rgba(255,255,255,0.1)'
-                    } as any}
-                    title="Open AI Agent Manager"
+                    } as React.CSSProperties}
+                    title="Open AI Tutor"
                 >
                     <VscSparkle size={12} />
-                    Agent Manager
+                    AI Tutor
                 </div>
             </div>
 

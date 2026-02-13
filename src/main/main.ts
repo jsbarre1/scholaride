@@ -378,6 +378,41 @@ ipcMain.on("terminal-set-cwd", (event, cwd) => {
 });
 
 // IPC Handlers
+ipcMain.handle("ai-chat", async (event, payload) => {
+  const { messages } = payload || {};
+
+  console.log("[AI Tutor] Sending request to backend:", {
+    url: "http://localhost:1234/api/ai/chat",
+    messageCount: messages?.length,
+  });
+
+  try {
+    if (!messages) {
+      throw new Error("No messages provided in request payload");
+    }
+
+    const response = await fetch("http://localhost:1234/api/ai/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ messages }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Server responded with ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error: any) {
+    console.error("[AI Tutor] IPC Chat Handler Error:", error);
+    throw error;
+  }
+});
+
 ipcMain.handle("get-workspace-path", () => {
   return getWorkspacePath();
 });

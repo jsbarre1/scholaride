@@ -38,9 +38,9 @@ const StatusBar = ({ language, onTerminalToggle, onAiToggle, isAiActive }: Statu
                         height: '100%'
                     }}
                     onClick={onAiToggle}
-                    title="Toggle AI Agent"
+                    title="Toggle AI Tutor"
                 >
-                    <VscSparkle /> AI Agent
+                    <VscSparkle /> AI Tutor
                 </div>
                 <div style={{ cursor: 'pointer' }} onClick={onTerminalToggle} title="Toggle Terminal">
                     <VscTerminal />
