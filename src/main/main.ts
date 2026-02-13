@@ -17,6 +17,8 @@ if (require("electron-squirrel-startup")) {
 
 let ptyProcess: any = null;
 let mainWindow: BrowserWindow | null = null;
+let currentTerminalCwd: string = "";
+let commandBuffer: string = "";
 
 // Workspace directory - sandboxed location for user files
 const getWorkspacePath = (): string => {
@@ -98,221 +100,6 @@ const createWindow = (): void => {
     mainWindow = null;
   });
 
-  // Setup terminal with workspace restrictions
-  let currentTerminalCwd = getWorkspacePath();
-  let commandBuffer = "";
-
-  const createPty = (cwd: string) => {
-    if (ptyProcess) {
-      ptyProcess.kill();
-    }
-
-    // Ensure we start in the workspace
-    const workspacePath = getWorkspacePath();
-    const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
-    currentTerminalCwd = safeCwd;
-
-    const shell = process.platform === "win32" ? "powershell.exe" : "zsh";
-    const args: string[] = []; // Removed -l to fix compdef error on Mac
-
-    // Set HOME and USERPROFILE to workspacePath to restrict 'cd' and 'cd ~'
-    const env = {
-      ...process.env,
-      TERM: "xterm-256color",
-      HOME: workspacePath,
-      USERPROFILE: workspacePath,
-    };
-
-    // Remove npm_config_prefix which can mess up nvm in the integrated terminal
-    delete (env as any).npm_config_prefix;
-
-    ptyProcess = pty.spawn(shell, args, {
-      name: "xterm-color",
-      cols: 80,
-      rows: 24,
-      cwd: safeCwd,
-      env: env as any,
-    });
-
-    ptyProcess.onData((data: string) => {
-      if (
-        mainWindow &&
-        !mainWindow.isDestroyed() &&
-        mainWindow.webContents &&
-        !mainWindow.webContents.isDestroyed()
-      ) {
-        try {
-          mainWindow.webContents.send("terminal-data", data);
-        } catch (e) {
-          console.warn("Failed to send terminal data:", e);
-        }
-      }
-    });
-  };
-
-  // Validate and filter terminal commands
-  const validateCommand = (
-    cmdLine: string,
-  ): { allowed: boolean; reason?: string } => {
-    const workspacePath = getWorkspacePath();
-
-    // Split by command separators to check each command in a pipeline/sequence
-    const commands = cmdLine.split(/[;&|]/);
-
-    for (let cmd of commands) {
-      const trimmedCmd = cmd.trim();
-      if (!trimmedCmd) continue;
-
-      // Check for cd commands
-      const cdMatch = trimmedCmd.match(/^cd(?:\s+(.*))?$/);
-      if (cdMatch) {
-        const targetPath = (cdMatch[1] || "").trim().replace(/['"]/g, "");
-
-        let resolvedPath;
-        if (!targetPath || targetPath === "~") {
-          resolvedPath = workspacePath;
-        } else if (targetPath.startsWith("~")) {
-          // Resolve ~ relative to workspace
-          resolvedPath = path.resolve(
-            workspacePath,
-            targetPath.substring(1).replace(/^[\\/]+/, ""),
-          );
-        } else {
-          resolvedPath = path.resolve(currentTerminalCwd, targetPath);
-        }
-
-        if (!resolvedPath.startsWith(workspacePath)) {
-          return {
-            allowed: false,
-            reason: `Access denied: Cannot navigate outside workspace (${path.basename(workspacePath)})\r\n`,
-          };
-        }
-
-        // Update current directory tracking if it's a valid directory
-        if (
-          fsSync.existsSync(resolvedPath) &&
-          fsSync.statSync(resolvedPath).isDirectory()
-        ) {
-          currentTerminalCwd = resolvedPath;
-        }
-      }
-
-      // Check for file operations or paths that might access outside workspace
-      // Look for any absolute or relative paths with ..
-      const pathRegex = /(?:^|\s)((?:\/|~|\.\.\/)[^\s;&|]*)/g;
-      let match;
-      while ((match = pathRegex.exec(trimmedCmd)) !== null) {
-        const p = match[1];
-        if (!p) continue;
-
-        let resolved;
-        if (p.startsWith("~")) {
-          resolved = path.resolve(
-            workspacePath,
-            p.substring(1).replace(/^[\\/]+/, ""),
-          );
-        } else if (path.isAbsolute(p) || p.includes("..")) {
-          resolved = path.resolve(currentTerminalCwd, p);
-
-          if (!resolved.startsWith(workspacePath)) {
-            return {
-              allowed: true, // We allow things like 'ls /' but we block 'cd /'
-              // Actually, if they want to block ESCAPE, we should block any outside access attempt
-            };
-          }
-        }
-      }
-
-      // Explicitly block sensitive copy commands from outside
-      const restrictedCmds = ["cp ", "mv ", "scp ", "rsync "];
-      if (restrictedCmds.some((prefix) => trimmedCmd.startsWith(prefix))) {
-        // Simple check for any path in the command that resolves outside
-        const parts = trimmedCmd.split(/\s+/);
-        for (const part of parts) {
-          if (part.startsWith("-")) continue;
-          if (
-            part === "cp" ||
-            part === "mv" ||
-            part === "scp" ||
-            part === "rsync"
-          )
-            continue;
-
-          const cleanPart = part.replace(/['"]/g, "");
-          if (cleanPart) {
-            const resolved = path.resolve(currentTerminalCwd, cleanPart);
-            if (
-              !resolved.startsWith(workspacePath) &&
-              fsSync.existsSync(resolved)
-            ) {
-              return {
-                allowed: false,
-                reason: `Access denied: External file operations are restricted\r\n`,
-              };
-            }
-          }
-        }
-      }
-    }
-
-    return { allowed: true };
-  };
-
-  createPty(getWorkspacePath());
-
-  ipcMain.on("terminal-input", (event, data) => {
-    if (!ptyProcess) return;
-
-    // Handle backspace and basic command buffering
-    // This isn't perfect for complex terminal interactions but catches standard usage
-    for (let i = 0; i < data.length; i++) {
-      const char = data[i];
-      if (char === "\r") {
-        const validation = validateCommand(commandBuffer);
-        if (!validation.allowed) {
-          // Block the command and show error
-          if (
-            mainWindow &&
-            !mainWindow.isDestroyed() &&
-            mainWindow.webContents &&
-            !mainWindow.webContents.isDestroyed()
-          ) {
-            try {
-              mainWindow.webContents.send(
-                "terminal-data",
-                `\r\n${validation.reason}`,
-              );
-            } catch (e) {}
-          }
-          commandBuffer = "";
-          // Send Ctrl+C to the terminal to clear the line
-          ptyProcess.write("\x03");
-          return;
-        }
-        commandBuffer = "";
-      } else if (char === "\x7f" || char === "\b") {
-        if (commandBuffer.length > 0) {
-          commandBuffer = commandBuffer.slice(0, -1);
-        }
-      } else if (char.charCodeAt(0) >= 32) {
-        commandBuffer += char;
-      }
-    }
-
-    // Pass through to terminal
-    ptyProcess.write(data);
-  });
-
-  ipcMain.on("terminal-resize", (event, { cols, rows }) => {
-    if (ptyProcess) ptyProcess.resize(cols, rows);
-  });
-
-  ipcMain.on("terminal-set-cwd", (event, cwd) => {
-    const workspacePath = getWorkspacePath();
-    const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
-    createPty(safeCwd);
-  });
-
   // Native Menu Setup for Mac
   const { Menu } = require("electron");
   const template: any[] = [
@@ -387,6 +174,208 @@ const createWindow = (): void => {
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 };
+
+// --- Terminal & PTY Setup ---
+const createPty = (cwd: string) => {
+  if (ptyProcess) {
+    try {
+      ptyProcess.kill();
+    } catch (e) {}
+  }
+
+  // Ensure we start in the workspace
+  const workspacePath = getWorkspacePath();
+  const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
+  currentTerminalCwd = safeCwd;
+
+  const shell = process.platform === "win32" ? "powershell.exe" : "zsh";
+  // Use -f on Mac to skip startup files and prevent 'compdef' errors from system scripts
+  const args: string[] = process.platform === "darwin" ? ["-f"] : [];
+
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    TERM: "xterm-256color",
+    HOME: workspacePath,
+    USERPROFILE: workspacePath,
+  };
+
+  // Aggressively clean up environment variables to prevent leaks and Zsh errors
+  delete env.npm_config_prefix;
+  delete env.ZSH; // Oh-My-Zsh
+  delete env.FPATH; // Zsh completion path
+  delete env.ZSH_COMPDUMP; // Zsh completion dump
+  delete env.ZDOTDIR; // Zsh config dir
+
+  // Set a minimal safe PATH if on Unix
+  if (process.platform !== "win32") {
+    env.PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  }
+
+  ptyProcess = pty.spawn(shell, args, {
+    name: "xterm-color",
+    cols: 80,
+    rows: 24,
+    cwd: safeCwd,
+    env: env as any,
+  });
+
+  ptyProcess.onData((data: string) => {
+    if (
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      mainWindow.webContents &&
+      !mainWindow.webContents.isDestroyed()
+    ) {
+      try {
+        mainWindow.webContents.send("terminal-data", data);
+      } catch (e) {
+        console.warn("Failed to send terminal data:", e);
+      }
+    }
+  });
+};
+
+const validateCommand = (
+  cmdLine: string,
+): { allowed: boolean; reason?: string } => {
+  const workspacePath = getWorkspacePath();
+  const commands = cmdLine.split(/[;&|]/);
+
+  for (let cmd of commands) {
+    const trimmedCmd = cmd.trim();
+    if (!trimmedCmd) continue;
+
+    const cdMatch = trimmedCmd.match(/^cd(?:\s+(.*))?$/);
+    if (cdMatch) {
+      const targetPath = (cdMatch[1] || "").trim().replace(/['"]/g, "");
+
+      let resolvedPath;
+      if (!targetPath || targetPath === "~") {
+        resolvedPath = workspacePath;
+      } else if (targetPath.startsWith("~")) {
+        resolvedPath = path.resolve(
+          workspacePath,
+          targetPath.substring(1).replace(/^[\\/]+/, ""),
+        );
+      } else {
+        resolvedPath = path.resolve(currentTerminalCwd, targetPath);
+      }
+
+      if (!resolvedPath.startsWith(workspacePath)) {
+        return {
+          allowed: false,
+          reason: `Access denied: Cannot navigate outside workspace (${path.basename(workspacePath)})\r\n`,
+        };
+      }
+
+      if (
+        fsSync.existsSync(resolvedPath) &&
+        fsSync.statSync(resolvedPath).isDirectory()
+      ) {
+        currentTerminalCwd = resolvedPath;
+      }
+    }
+
+    const pathRegex = /(?:^|\s)((?:\/|~|\.\.\/)[^\s;&|]*)/g;
+    let match;
+    while ((match = pathRegex.exec(trimmedCmd)) !== null) {
+      const p = match[1];
+      if (!p) continue;
+
+      let resolved;
+      if (p.startsWith("~")) {
+        resolved = path.resolve(
+          workspacePath,
+          p.substring(1).replace(/^[\\/]+/, ""),
+        );
+      } else if (path.isAbsolute(p) || p.includes("..")) {
+        resolved = path.resolve(currentTerminalCwd, p);
+      }
+    }
+
+    const restrictedCmds = ["cp ", "mv ", "scp ", "rsync "];
+    if (restrictedCmds.some((prefix) => trimmedCmd.startsWith(prefix))) {
+      const parts = trimmedCmd.split(/\s+/);
+      for (const part of parts) {
+        if (part.startsWith("-")) continue;
+        if (
+          part === "cp" ||
+          part === "mv" ||
+          part === "scp" ||
+          part === "rsync"
+        )
+          continue;
+
+        const cleanPart = part.replace(/['"]/g, "");
+        if (cleanPart) {
+          const resolved = path.resolve(currentTerminalCwd, cleanPart);
+          if (
+            !resolved.startsWith(workspacePath) &&
+            fsSync.existsSync(resolved)
+          ) {
+            return {
+              allowed: false,
+              reason: `Access denied: External file operations are restricted\r\n`,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return { allowed: true };
+};
+
+// Initialize terminal state
+currentTerminalCwd = getWorkspacePath();
+
+ipcMain.on("terminal-input", (event, data) => {
+  if (!ptyProcess) return;
+
+  for (let i = 0; i < data.length; i++) {
+    const char = data[i];
+    if (char === "\r") {
+      const validation = validateCommand(commandBuffer);
+      if (!validation.allowed) {
+        if (
+          mainWindow &&
+          !mainWindow.isDestroyed() &&
+          mainWindow.webContents &&
+          !mainWindow.webContents.isDestroyed()
+        ) {
+          try {
+            mainWindow.webContents.send(
+              "terminal-data",
+              `\r\n${validation.reason}`,
+            );
+          } catch (e) {}
+        }
+        commandBuffer = "";
+        ptyProcess.write("\x03");
+        return;
+      }
+      commandBuffer = "";
+    } else if (char === "\x7f" || char === "\b") {
+      if (commandBuffer.length > 0) {
+        commandBuffer = commandBuffer.slice(0, -1);
+      }
+    } else if (char.charCodeAt(0) >= 32) {
+      commandBuffer += char;
+    }
+  }
+
+  ptyProcess.write(data);
+});
+
+ipcMain.on("terminal-resize", (event, { cols, rows }) => {
+  if (ptyProcess) ptyProcess.resize(cols, rows);
+});
+
+ipcMain.on("terminal-set-cwd", (event, cwd) => {
+  const workspacePath = getWorkspacePath();
+  const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
+  createPty(safeCwd);
+});
 
 // IPC Handlers
 ipcMain.handle("get-workspace-path", () => {
@@ -787,6 +776,7 @@ ipcMain.handle("open-directory", async () => {
 app.on("ready", async () => {
   await initializeWorkspace();
   createWindow();
+  createPty(getWorkspacePath());
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common
