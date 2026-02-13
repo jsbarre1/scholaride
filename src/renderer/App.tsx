@@ -10,6 +10,7 @@ import TitleBar from './components/TitleBar';
 import ActivityBar from './components/ActivityBar';
 import StatusBar from './components/StatusBar';
 import EditorArea from './components/EditorArea';
+import AiAgentPanel from './components/AiAgentPanel';
 import { ElectronAPI } from './types/index';
 
 loader.config({
@@ -26,6 +27,7 @@ const App: React.FC = () => {
     const [showTerminal, setShowTerminal] = useState(true);
     const [rootPath, setRootPath] = useState<string>('');
     const [isDirty, setIsDirty] = useState(false);
+    const [showAiPanel, setShowAiPanel] = useState(false);
 
     useEffect(() => {
         // Automatically open the workspace folder on start
@@ -170,7 +172,11 @@ const App: React.FC = () => {
             overflow: 'hidden'
         }}>
 
-            <TitleBar selectedFile={selectedFile} />
+            <TitleBar
+                selectedFile={selectedFile}
+                onAiToggle={() => setShowAiPanel(!showAiPanel)}
+                isAiActive={showAiPanel}
+            />
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
@@ -179,42 +185,51 @@ const App: React.FC = () => {
                 {/* Resizable Sidebar and Editor/Terminal area */}
                 <div style={{ flex: 1 }}>
                     <Allotment>
-                        <Allotment.Pane preferredSize={260} minSize={170}>
-                            <FileExplorer
-                                onFileSelect={handleFileSelect}
-                                currentPath={selectedFile || ''}
-                                rootPath={rootPath}
-                                onRefreshRequested={() => { }}
-                                onOpenFolder={handleOpenFolder}
-                            />
-                        </Allotment.Pane>
                         <Allotment.Pane>
-                            <Allotment vertical>
-                                <Allotment.Pane>
-                                    <EditorArea
-                                        selectedFile={selectedFile}
-                                        fileContent={fileContent}
-                                        language={language}
-                                        onFileClose={() => {
-                                            if (selectedFile) {
-                                                window.electronAPI.notifyFileClosed(selectedFile);
-                                            }
-                                            setSelectedFile(null);
-                                        }}
-                                        onContentChange={handleEditorChange}
-                                        onRun={handleRunFile}
-                                        onSave={handleSaveFile}
-                                        isDirty={isDirty}
+                            <Allotment>
+                                <Allotment.Pane preferredSize={260} minSize={170}>
+                                    <FileExplorer
+                                        onFileSelect={handleFileSelect}
+                                        currentPath={selectedFile || ''}
+                                        rootPath={rootPath}
+                                        onRefreshRequested={() => { }}
                                         onOpenFolder={handleOpenFolder}
                                     />
                                 </Allotment.Pane>
-                                {showTerminal && (
-                                    <Allotment.Pane preferredSize={200} minSize={100}>
-                                        <TerminalPanel />
-                                    </Allotment.Pane>
-                                )}
+                                <Allotment.Pane>
+                                    <Allotment vertical>
+                                        <Allotment.Pane>
+                                            <EditorArea
+                                                selectedFile={selectedFile}
+                                                fileContent={fileContent}
+                                                language={language}
+                                                onFileClose={() => {
+                                                    if (selectedFile) {
+                                                        window.electronAPI.notifyFileClosed(selectedFile);
+                                                    }
+                                                    setSelectedFile(null);
+                                                }}
+                                                onContentChange={handleEditorChange}
+                                                onRun={handleRunFile}
+                                                onSave={handleSaveFile}
+                                                isDirty={isDirty}
+                                                onOpenFolder={handleOpenFolder}
+                                            />
+                                        </Allotment.Pane>
+                                        {showTerminal && (
+                                            <Allotment.Pane preferredSize={200} minSize={100}>
+                                                <TerminalPanel />
+                                            </Allotment.Pane>
+                                        )}
+                                    </Allotment>
+                                </Allotment.Pane>
                             </Allotment>
                         </Allotment.Pane>
+                        {showAiPanel && (
+                            <Allotment.Pane preferredSize={300} minSize={200}>
+                                <AiAgentPanel onClose={() => setShowAiPanel(false)} />
+                            </Allotment.Pane>
+                        )}
                     </Allotment>
                 </div>
             </div>
@@ -222,6 +237,8 @@ const App: React.FC = () => {
             <StatusBar
                 language={language}
                 onTerminalToggle={() => setShowTerminal(!showTerminal)}
+                onAiToggle={() => setShowAiPanel(!showAiPanel)}
+                isAiActive={showAiPanel}
             />
         </div>
     );

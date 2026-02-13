@@ -1,12 +1,14 @@
 import React from 'react';
-import { VscSourceControl, VscTerminal } from 'react-icons/vsc';
+import { VscSourceControl, VscTerminal, VscSparkle } from 'react-icons/vsc';
 
 interface StatusBarProps {
     language: string;
     onTerminalToggle: () => void;
+    onAiToggle: () => void;
+    isAiActive: boolean;
 }
 
-const StatusBar: React.FC<StatusBarProps> = ({ language, onTerminalToggle }) => {
+const StatusBar = ({ language, onTerminalToggle, onAiToggle, isAiActive }: StatusBarProps) => {
     return (
         <footer style={{
             height: '22px',
@@ -25,6 +27,21 @@ const StatusBar: React.FC<StatusBarProps> = ({ language, onTerminalToggle }) => 
                 </div>
             </div>
             <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer',
+                        background: isAiActive ? 'rgba(255, 255, 255, 0.2)' : 'transparent',
+                        padding: '0 5px',
+                        height: '100%'
+                    }}
+                    onClick={onAiToggle}
+                    title="Toggle AI Agent"
+                >
+                    <VscSparkle /> AI Agent
+                </div>
                 <div style={{ cursor: 'pointer' }} onClick={onTerminalToggle} title="Toggle Terminal">
                     <VscTerminal />
                 </div>

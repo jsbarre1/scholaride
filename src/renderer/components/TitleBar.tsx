@@ -1,10 +1,12 @@
-import React from 'react';
+import { VscSparkle } from 'react-icons/vsc';
 
 interface TitleBarProps {
     selectedFile: string | null;
+    onAiToggle: () => void;
+    isAiActive: boolean;
 }
 
-const TitleBar: React.FC<TitleBarProps> = ({ selectedFile }) => {
+const TitleBar = ({ selectedFile, onAiToggle, isAiActive }: TitleBarProps) => {
     return (
         <div style={{
             height: '35px',
@@ -25,8 +27,32 @@ const TitleBar: React.FC<TitleBarProps> = ({ selectedFile }) => {
                 <span style={{ fontSize: '16px' }}>🎓</span>
             </div>
 
-            <div style={{ flex: 1, display: 'flex', justifyContent: 'center', fontSize: '12px', opacity: 0.7 }}>
-                {selectedFile ? `${selectedFile.split(/[/\\]/).pop()} - ScholarIDE` : 'ScholarIDE'}
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '15px' }}>
+                <div style={{ fontSize: '12px', opacity: 0.7 }}>
+                    {selectedFile ? `${selectedFile.split(/[/\\]/).pop()} - ScholarIDE` : 'ScholarIDE'}
+                </div>
+                <div
+                    onClick={onAiToggle}
+                    style={{
+                        WebkitAppRegion: 'no-drag',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        background: isAiActive ? '#007acc' : '#333',
+                        color: 'white',
+                        padding: '2px 10px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: '500',
+                        transition: 'all 0.2s',
+                        border: '1px solid rgba(255,255,255,0.1)'
+                    } as any}
+                    title="Open AI Agent Manager"
+                >
+                    <VscSparkle size={12} />
+                    Agent Manager
+                </div>
             </div>
 
             <div style={{ width: '100px' }} />
