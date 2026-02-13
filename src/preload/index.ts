@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("write-file", path, content),
   createFile: (path: string) => ipcRenderer.invoke("create-file", path),
   getAppPath: () => ipcRenderer.invoke("get-app-path"),
+  getWorkspacePath: () => ipcRenderer.invoke("get-workspace-path"),
   openDirectory: () => ipcRenderer.invoke("open-directory"),
   onMenuOpenFolder: (callback: () => void) => {
     const listener = () => callback();
@@ -35,4 +36,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("file-system-changed", listener);
     return () => ipcRenderer.removeListener("file-system-changed", listener);
   },
+  onFileExternallyModified: (
+    callback: (data: { filePath: string; action: string }) => void,
+  ) => {
+    const listener = (
+      _event: any,
+      data: { filePath: string; action: string },
+    ) => callback(data);
+    ipcRenderer.on("file-externally-modified", listener);
+    return () =>
+      ipcRenderer.removeListener("file-externally-modified", listener);
+  },
+  notifyFileOpened: (filePath: string) =>
+    ipcRenderer.send("file-opened", filePath),
+  notifyFileClosed: (filePath: string) =>
+    ipcRenderer.send("file-closed", filePath),
 });

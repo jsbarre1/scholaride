@@ -26,9 +26,11 @@ const App: React.FC = () => {
     const [showTerminal, setShowTerminal] = useState(true);
     const [rootPath, setRootPath] = useState<string>('');
     const [isDirty, setIsDirty] = useState(false);
-    const isSavingRef = React.useRef(false);
 
     useEffect(() => {
+        // Automatically open the workspace folder on start
+        handleOpenFolder();
+
         const removeMenuListener = window.electronAPI.onMenuOpenFolder(() => {
             handleOpenFolder();
         });
@@ -38,76 +40,60 @@ const App: React.FC = () => {
         };
     }, []);
 
-    // Watch for file system changes and reload the currently open file
+    // Note: File protection is now handled by the main process
+    // The main process tracks which files are open and only protects closed files
+    // This prevents conflicts with user saves
+
+    // Listen for external file modification notifications
     useEffect(() => {
-        const removeFileSystemListener = window.electronAPI.onFileSystemChanged(
-            async (eventType: string, filename: string) => {
-                console.log('[FileWatcher] Change detected:', { eventType, filename, selectedFile, isDirty, isSaving: isSavingRef.current });
+        const removeListener = window.electronAPI.onFileExternallyModified(
+            ({ filePath, action }) => {
+                console.log('[App] Received external modification event:', { filePath, action });
+                const fileName = filePath.split(/[/\\]/).pop();
 
-                // Ignore changes if we're currently saving (to prevent infinite loop)
-                if (isSavingRef.current) {
-                    console.log('[FileWatcher] Ignoring change - we are currently saving');
-                    isSavingRef.current = false;
-                    return;
-                }
-
-                if (!selectedFile || !filename) return;
-
-                // Build the full path of the changed file
-                let changedFilePath = filename;
-                if (!filename.includes('/') && !filename.includes('\\')) {
-                    changedFilePath = `${rootPath}/${filename}`;
-                }
-
-                // Normalize paths for comparison
-                const normalizedSelectedFile = selectedFile.replace(/\\/g, '/');
-                const normalizedChangedFile = changedFilePath.replace(/\\/g, '/');
-
-                console.log('[FileWatcher] Path comparison:', {
-                    normalizedSelectedFile,
-                    normalizedChangedFile,
-                    matches: normalizedSelectedFile === normalizedChangedFile
-                });
-
-                // Check if the changed file is the currently open file (exact match)
-                if (normalizedSelectedFile === normalizedChangedFile ||
-                    normalizedChangedFile.endsWith(normalizedSelectedFile) ||
-                    normalizedSelectedFile.endsWith(normalizedChangedFile)) {
-
-                    console.log('[FileWatcher] File match detected! Blocking external change');
-
-                    // Always block external changes when file is open in editor
-                    const fileName = selectedFile.split(/[/\\]/).pop();
+                if (action === 'reverted-modification') {
+                    console.log('[App] Showing external edit alert for:', fileName);
                     window.alert(
-                        `The file "${fileName}" was modified externally.\n\n` +
-                        `External edits cannot be applied while the file is open in the editor. ` +
-                        `Saving the current editor content to preserve your view.`
+                        `⚠️ External Edit Blocked\n\n` +
+                        `The file "${fileName}" was modified by an external program (VS Code, nano, vim, etc.), ` +
+                        `but the change was automatically reverted.\n\n` +
+                        `📝 Workspace Protection:\n` +
+                        `All files in this workspace are protected and can ONLY be edited within ScholarIDE.\n\n` +
+                        `To edit this file, please open it in the ScholarIDE editor.`
                     );
-
-                    // Save the current editor content over the external changes
-                    try {
-                        isSavingRef.current = true;
-                        await window.electronAPI.writeFile(selectedFile, fileContent);
-                        console.log('[FileWatcher] File saved to preserve editor content over external changes:', selectedFile);
-                    } catch (error) {
-                        console.error('[FileWatcher] Failed to save file:', error);
-                        isSavingRef.current = false;
-                    }
+                } else if (action === 'restored-deleted') {
+                    console.log('[App] Showing external deletion alert for:', fileName);
+                    window.alert(
+                        `⚠️ External Deletion Blocked\n\n` +
+                        `The file "${fileName}" was deleted by an external program or command, ` +
+                        `but it has been automatically restored.\n\n` +
+                        `🛡️ Workspace Protection:\n` +
+                        `All files in this workspace are protected from external deletion.\n\n` +
+                        `To delete this file, please use the ScholarIDE file explorer.`
+                    );
                 }
             }
         );
 
         return () => {
-            removeFileSystemListener();
+            removeListener();
         };
-    }, [selectedFile, rootPath, isDirty, fileContent]);
+    }, []);
 
     const handleFileSelect = async (filePath: string) => {
         try {
+            // Notify main process that we're closing the previous file
+            if (selectedFile) {
+                window.electronAPI.notifyFileClosed(selectedFile);
+            }
+
             const content = await window.electronAPI.readFile(filePath);
             setFileContent(content);
             setSelectedFile(filePath);
             setIsDirty(false);
+
+            // Notify main process that this file is now open
+            window.electronAPI.notifyFileOpened(filePath);
 
             const ext = filePath.split('.').pop();
             switch (ext) {
@@ -139,9 +125,11 @@ const App: React.FC = () => {
 
     const handleEditorChange = (value: string | undefined) => {
         if (selectedFile && value !== undefined) {
-            console.log('[Editor] Content changed, setting isDirty to true');
             setFileContent(value);
-            setIsDirty(true);
+            if (!isDirty) {
+                console.log('[Editor] Content changed, setting isDirty to true');
+                setIsDirty(true);
+            }
         }
     };
 
@@ -207,7 +195,12 @@ const App: React.FC = () => {
                                         selectedFile={selectedFile}
                                         fileContent={fileContent}
                                         language={language}
-                                        onFileClose={() => setSelectedFile(null)}
+                                        onFileClose={() => {
+                                            if (selectedFile) {
+                                                window.electronAPI.notifyFileClosed(selectedFile);
+                                            }
+                                            setSelectedFile(null);
+                                        }}
                                         onContentChange={handleEditorChange}
                                         onRun={handleRunFile}
                                         onSave={handleSaveFile}

@@ -13,11 +13,58 @@ declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
-  app.quit();
 }
 
 let ptyProcess: any = null;
 let mainWindow: BrowserWindow | null = null;
+
+// Workspace directory - sandboxed location for user files
+const getWorkspacePath = (): string => {
+  return path.join(app.getPath("userData"), "ScholarIDE-Workspace");
+};
+
+// Security: Validate that a path is within the workspace
+const validatePath = (targetPath: string): string => {
+  const workspacePath = getWorkspacePath();
+  const resolvedPath = path.resolve(targetPath);
+
+  if (!resolvedPath.startsWith(workspacePath)) {
+    throw new Error("Access denied: Path is outside workspace");
+  }
+
+  return resolvedPath;
+};
+
+// Initialize workspace directory
+const initializeWorkspace = async (): Promise<void> => {
+  const workspacePath = getWorkspacePath();
+
+  try {
+    await fs.access(workspacePath);
+  } catch {
+    // Workspace doesn't exist, create it
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    // Create a welcome file
+    const welcomeFile = path.join(workspacePath, "welcome.md");
+    await fs.writeFile(
+      welcomeFile,
+      `# Welcome to ScholarIDE!
+
+This is your workspace directory. All your files will be stored here.
+
+## Getting Started
+
+1. Create new files using the file explorer
+2. Edit files in the Monaco editor
+3. Run Python files with the Run button
+
+Happy coding!
+`,
+      "utf-8",
+    );
+  }
+};
 
 const createWindow = (): void => {
   // Create the browser window.
@@ -47,16 +94,35 @@ const createWindow = (): void => {
   // Open the DevTools.
   mainWindow.webContents.openDevTools();
 
-  // Setup terminal
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
+  // Setup terminal with workspace restrictions
+  let currentTerminalCwd = getWorkspacePath();
+  let commandBuffer = "";
+
   const createPty = (cwd: string) => {
     if (ptyProcess) {
       ptyProcess.kill();
     }
 
-    const shell = process.platform === "win32" ? "powershell.exe" : "zsh";
-    const args = process.platform === "win32" ? [] : ["-l"];
+    // Ensure we start in the workspace
+    const workspacePath = getWorkspacePath();
+    const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
+    currentTerminalCwd = safeCwd;
 
-    const env = { ...process.env, TERM: "xterm-256color" };
+    const shell = process.platform === "win32" ? "powershell.exe" : "zsh";
+    const args: string[] = []; // Removed -l to fix compdef error on Mac
+
+    // Set HOME and USERPROFILE to workspacePath to restrict 'cd' and 'cd ~'
+    const env = {
+      ...process.env,
+      TERM: "xterm-256color",
+      HOME: workspacePath,
+      USERPROFILE: workspacePath,
+    };
+
     // Remove npm_config_prefix which can mess up nvm in the integrated terminal
     delete (env as any).npm_config_prefix;
 
@@ -64,19 +130,177 @@ const createWindow = (): void => {
       name: "xterm-color",
       cols: 80,
       rows: 24,
-      cwd: cwd,
+      cwd: safeCwd,
       env: env as any,
     });
 
     ptyProcess.onData((data: string) => {
-      mainWindow?.webContents.send("terminal-data", data);
+      if (
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        mainWindow.webContents &&
+        !mainWindow.webContents.isDestroyed()
+      ) {
+        try {
+          mainWindow.webContents.send("terminal-data", data);
+        } catch (e) {
+          console.warn("Failed to send terminal data:", e);
+        }
+      }
     });
   };
 
-  createPty(process.env.HOME);
+  // Validate and filter terminal commands
+  const validateCommand = (
+    cmdLine: string,
+  ): { allowed: boolean; reason?: string } => {
+    const workspacePath = getWorkspacePath();
+
+    // Split by command separators to check each command in a pipeline/sequence
+    const commands = cmdLine.split(/[;&|]/);
+
+    for (let cmd of commands) {
+      const trimmedCmd = cmd.trim();
+      if (!trimmedCmd) continue;
+
+      // Check for cd commands
+      const cdMatch = trimmedCmd.match(/^cd(?:\s+(.*))?$/);
+      if (cdMatch) {
+        const targetPath = (cdMatch[1] || "").trim().replace(/['"]/g, "");
+
+        let resolvedPath;
+        if (!targetPath || targetPath === "~") {
+          resolvedPath = workspacePath;
+        } else if (targetPath.startsWith("~")) {
+          // Resolve ~ relative to workspace
+          resolvedPath = path.resolve(
+            workspacePath,
+            targetPath.substring(1).replace(/^[\\/]+/, ""),
+          );
+        } else {
+          resolvedPath = path.resolve(currentTerminalCwd, targetPath);
+        }
+
+        if (!resolvedPath.startsWith(workspacePath)) {
+          return {
+            allowed: false,
+            reason: `Access denied: Cannot navigate outside workspace (${path.basename(workspacePath)})\r\n`,
+          };
+        }
+
+        // Update current directory tracking if it's a valid directory
+        if (
+          fsSync.existsSync(resolvedPath) &&
+          fsSync.statSync(resolvedPath).isDirectory()
+        ) {
+          currentTerminalCwd = resolvedPath;
+        }
+      }
+
+      // Check for file operations or paths that might access outside workspace
+      // Look for any absolute or relative paths with ..
+      const pathRegex = /(?:^|\s)((?:\/|~|\.\.\/)[^\s;&|]*)/g;
+      let match;
+      while ((match = pathRegex.exec(trimmedCmd)) !== null) {
+        const p = match[1];
+        if (!p) continue;
+
+        let resolved;
+        if (p.startsWith("~")) {
+          resolved = path.resolve(
+            workspacePath,
+            p.substring(1).replace(/^[\\/]+/, ""),
+          );
+        } else if (path.isAbsolute(p) || p.includes("..")) {
+          resolved = path.resolve(currentTerminalCwd, p);
+
+          if (!resolved.startsWith(workspacePath)) {
+            return {
+              allowed: true, // We allow things like 'ls /' but we block 'cd /'
+              // Actually, if they want to block ESCAPE, we should block any outside access attempt
+            };
+          }
+        }
+      }
+
+      // Explicitly block sensitive copy commands from outside
+      const restrictedCmds = ["cp ", "mv ", "scp ", "rsync "];
+      if (restrictedCmds.some((prefix) => trimmedCmd.startsWith(prefix))) {
+        // Simple check for any path in the command that resolves outside
+        const parts = trimmedCmd.split(/\s+/);
+        for (const part of parts) {
+          if (part.startsWith("-")) continue;
+          if (
+            part === "cp" ||
+            part === "mv" ||
+            part === "scp" ||
+            part === "rsync"
+          )
+            continue;
+
+          const cleanPart = part.replace(/['"]/g, "");
+          if (cleanPart) {
+            const resolved = path.resolve(currentTerminalCwd, cleanPart);
+            if (
+              !resolved.startsWith(workspacePath) &&
+              fsSync.existsSync(resolved)
+            ) {
+              return {
+                allowed: false,
+                reason: `Access denied: External file operations are restricted\r\n`,
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return { allowed: true };
+  };
+
+  createPty(getWorkspacePath());
 
   ipcMain.on("terminal-input", (event, data) => {
-    if (ptyProcess) ptyProcess.write(data);
+    if (!ptyProcess) return;
+
+    // Handle backspace and basic command buffering
+    // This isn't perfect for complex terminal interactions but catches standard usage
+    for (let i = 0; i < data.length; i++) {
+      const char = data[i];
+      if (char === "\r") {
+        const validation = validateCommand(commandBuffer);
+        if (!validation.allowed) {
+          // Block the command and show error
+          if (
+            mainWindow &&
+            !mainWindow.isDestroyed() &&
+            mainWindow.webContents &&
+            !mainWindow.webContents.isDestroyed()
+          ) {
+            try {
+              mainWindow.webContents.send(
+                "terminal-data",
+                `\r\n${validation.reason}`,
+              );
+            } catch (e) {}
+          }
+          commandBuffer = "";
+          // Send Ctrl+C to the terminal to clear the line
+          ptyProcess.write("\x03");
+          return;
+        }
+        commandBuffer = "";
+      } else if (char === "\x7f" || char === "\b") {
+        if (commandBuffer.length > 0) {
+          commandBuffer = commandBuffer.slice(0, -1);
+        }
+      } else if (char.charCodeAt(0) >= 32) {
+        commandBuffer += char;
+      }
+    }
+
+    // Pass through to terminal
+    ptyProcess.write(data);
   });
 
   ipcMain.on("terminal-resize", (event, { cols, rows }) => {
@@ -84,7 +308,9 @@ const createWindow = (): void => {
   });
 
   ipcMain.on("terminal-set-cwd", (event, cwd) => {
-    createPty(cwd);
+    const workspacePath = getWorkspacePath();
+    const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
+    createPty(safeCwd);
   });
 
   // Native Menu Setup for Mac
@@ -114,7 +340,18 @@ const createWindow = (): void => {
         {
           label: "Open Folder...",
           accelerator: "CmdOrCtrl+O",
-          click: () => mainWindow?.webContents.send("menu-open-folder"),
+          click: () => {
+            if (
+              mainWindow &&
+              !mainWindow.isDestroyed() &&
+              mainWindow.webContents &&
+              !mainWindow.webContents.isDestroyed()
+            ) {
+              try {
+                mainWindow.webContents.send("menu-open-folder");
+              } catch (e) {}
+            }
+          },
         },
         { type: "separator" },
         { role: "quit" },
@@ -152,18 +389,23 @@ const createWindow = (): void => {
 };
 
 // IPC Handlers
+ipcMain.handle("get-workspace-path", () => {
+  return getWorkspacePath();
+});
+
 ipcMain.handle("list-directory", async (event, dirPath) => {
-  const absolutePath = path.isAbsolute(dirPath)
-    ? dirPath
-    : path.join(app.getAppPath(), dirPath);
   try {
-    const entries = await fs.readdir(absolutePath, { withFileTypes: true });
+    const absolutePath = path.isAbsolute(dirPath)
+      ? dirPath
+      : path.join(getWorkspacePath(), dirPath);
+    const validatedPath = validatePath(absolutePath);
+    const entries = await fs.readdir(validatedPath, { withFileTypes: true });
     return entries
       .filter((entry) => !entry.name.startsWith("."))
       .map((entry) => ({
         name: entry.name,
         isDirectory: entry.isDirectory(),
-        path: path.resolve(absolutePath, entry.name),
+        path: path.resolve(validatedPath, entry.name),
       }));
   } catch (error) {
     console.error("Error listing directory:", error);
@@ -172,11 +414,9 @@ ipcMain.handle("list-directory", async (event, dirPath) => {
 });
 
 ipcMain.handle("read-file", async (event, filePath) => {
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(app.getAppPath(), filePath);
   try {
-    return await fs.readFile(absolutePath, "utf-8");
+    const validatedPath = validatePath(filePath);
+    return await fs.readFile(validatedPath, "utf-8");
   } catch (error) {
     console.error("Error reading file:", error);
     throw error;
@@ -184,37 +424,79 @@ ipcMain.handle("read-file", async (event, filePath) => {
 });
 
 ipcMain.handle("write-file", async (event, filePath, content) => {
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(app.getAppPath(), filePath);
+  let validatedPath: string;
   try {
-    await fs.writeFile(absolutePath, content, "utf-8");
+    validatedPath = validatePath(filePath);
+
+    // Mark this path as being written internally
+    internalWritePaths.add(validatedPath);
+
+    // Update the snapshot BEFORE writing to prevent race condition
+    fileSnapshots.set(validatedPath, {
+      content,
+      mtime: Date.now(),
+      hash: hashContent(content),
+    });
+
+    await fs.writeFile(validatedPath, content, "utf-8");
+
+    // Update the snapshot with actual mtime after write
+    const stats = await fs.stat(validatedPath);
+    fileSnapshots.set(validatedPath, {
+      content,
+      mtime: stats.mtimeMs,
+      hash: hashContent(content),
+    });
+
+    // Remove from internal write set after a brief delay
+    setTimeout(() => internalWritePaths.delete(validatedPath), 100);
     return true;
   } catch (error) {
+    if (validatedPath) internalWritePaths.delete(validatedPath);
     console.error("Error writing file:", error);
     throw error;
   }
 });
 
 ipcMain.handle("create-file", async (event, filePath) => {
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.join(app.getAppPath(), filePath);
+  let validatedPath: string;
   try {
-    await fs.writeFile(absolutePath, "", "utf-8");
+    validatedPath = validatePath(filePath);
+
+    // Mark this path as being written internally
+    internalWritePaths.add(validatedPath);
+
+    // Update the snapshot BEFORE writing
+    fileSnapshots.set(validatedPath, {
+      content: "",
+      mtime: Date.now(),
+      hash: hashContent(""),
+    });
+
+    await fs.writeFile(validatedPath, "", "utf-8");
+
+    // Update the snapshot with actual mtime
+    const stats = await fs.stat(validatedPath);
+    fileSnapshots.set(validatedPath, {
+      content: "",
+      mtime: stats.mtimeMs,
+      hash: hashContent(""),
+    });
+
+    // Remove from internal write set after a brief delay
+    setTimeout(() => internalWritePaths.delete(validatedPath), 100);
     return true;
   } catch (error) {
+    if (validatedPath) internalWritePaths.delete(validatedPath);
     console.error("Error creating file:", error);
     throw error;
   }
 });
 
 ipcMain.handle("create-directory", async (event, dirPath) => {
-  const absolutePath = path.isAbsolute(dirPath)
-    ? dirPath
-    : path.join(app.getAppPath(), dirPath);
   try {
-    await fs.mkdir(absolutePath, { recursive: true });
+    const validatedPath = validatePath(dirPath);
+    await fs.mkdir(validatedPath, { recursive: true });
     return true;
   } catch (error) {
     console.error("Error creating directory:", error);
@@ -224,13 +506,22 @@ ipcMain.handle("create-directory", async (event, dirPath) => {
 
 ipcMain.handle("delete-path", async (event, targetPath) => {
   const { shell } = require("electron");
-  const absolutePath = path.isAbsolute(targetPath)
-    ? targetPath
-    : path.join(app.getAppPath(), targetPath);
+  let validatedPath: string;
   try {
-    await shell.trashItem(absolutePath);
+    validatedPath = validatePath(targetPath);
+
+    // Mark this path as being deleted internally
+    internalWritePaths.add(validatedPath);
+    await shell.trashItem(validatedPath);
+
+    // Remove from tracking
+    fileSnapshots.delete(validatedPath);
+
+    // Remove from internal write set after a brief delay
+    setTimeout(() => internalWritePaths.delete(validatedPath), 100);
     return true;
   } catch (error) {
+    if (validatedPath) internalWritePaths.delete(validatedPath);
     console.error("Error deleting path:", error);
     throw error;
   }
@@ -240,18 +531,205 @@ ipcMain.handle("get-app-path", () => {
   return app.getAppPath();
 });
 
+// File tracking system to block external edits
+interface FileSnapshot {
+  content: string;
+  mtime: number;
+  hash: string;
+}
+
+const fileSnapshots = new Map<string, FileSnapshot>();
+const internalWritePaths = new Set<string>();
+const openFiles = new Set<string>(); // Track files currently open in editor
 let currentWatcher: fsSync.FSWatcher | null = null;
+
+// IPC handler to track which files are open
+ipcMain.on("file-opened", (event, filePath) => {
+  openFiles.add(filePath);
+  console.log(`[FileTracker] File opened: ${filePath}`);
+});
+
+ipcMain.on("file-closed", (event, filePath) => {
+  openFiles.delete(filePath);
+  console.log(`[FileTracker] File closed: ${filePath}`);
+});
+
+// Generate a simple hash for file content
+const hashContent = (content: string): string => {
+  const crypto = require("crypto");
+  return crypto.createHash("md5").update(content).digest("hex");
+};
+
+// Scan and track all files in the workspace
+const scanAndTrackFiles = async (dirPath: string): Promise<void> => {
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+
+      // Skip ignored directories
+      const ignored = [
+        "node_modules",
+        ".git",
+        ".DS_Store",
+        ".webpack",
+        ".cache",
+        "dist",
+        "out",
+        "build",
+        "coverage",
+      ];
+
+      if (ignored.some((ignore) => entry.name.includes(ignore))) {
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        await scanAndTrackFiles(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          const content = await fs.readFile(fullPath, "utf-8");
+          const stats = await fs.stat(fullPath);
+          fileSnapshots.set(fullPath, {
+            content,
+            mtime: stats.mtimeMs,
+            hash: hashContent(content),
+          });
+        } catch (error) {
+          // Skip files that can't be read (binary, etc.)
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error scanning directory:", error);
+  }
+};
+
+// Check if a file change was external and revert if needed
+const handleFileChange = async (
+  fullPath: string,
+  eventType: string,
+): Promise<void> => {
+  // Ignore if this path is being written internally
+  if (internalWritePaths.has(fullPath)) {
+    return;
+  }
+
+  try {
+    // Check if file exists
+    const exists = fsSync.existsSync(fullPath);
+
+    if (!exists) {
+      // File was deleted externally
+      const snapshot = fileSnapshots.get(fullPath);
+      if (snapshot) {
+        console.warn(
+          `\n⚠️  [FileTracker] EXTERNAL DELETION DETECTED AND BLOCKED\n` +
+            `File: ${fullPath}\n` +
+            `This file was deleted by an external program or command.\n` +
+            `The file has been automatically restored to protect the workspace.\n` +
+            `Files in this workspace can ONLY be deleted within ScholarIDE.\n`,
+        );
+
+        // Restore the file
+        internalWritePaths.add(fullPath);
+        await fs.writeFile(fullPath, snapshot.content, "utf-8");
+        setTimeout(() => internalWritePaths.delete(fullPath), 100);
+
+        // Notify user
+        if (
+          mainWindow &&
+          !mainWindow.isDestroyed() &&
+          mainWindow.webContents &&
+          !mainWindow.webContents.isDestroyed()
+        ) {
+          try {
+            mainWindow.webContents.send("file-externally-modified", {
+              filePath: fullPath,
+              action: "restored-deleted",
+            });
+          } catch (e) {}
+        }
+      }
+      return;
+    }
+
+    // File was modified or created
+    const stats = await fs.stat(fullPath);
+    const snapshot = fileSnapshots.get(fullPath);
+
+    if (snapshot) {
+      // File exists in our tracking - check if it was modified externally
+      if (stats.mtimeMs > snapshot.mtime + 100) {
+        // 100ms tolerance
+        const currentContent = await fs.readFile(fullPath, "utf-8");
+        const currentHash = hashContent(currentContent);
+
+        if (currentHash !== snapshot.hash) {
+          console.warn(
+            `\n⚠️  [FileTracker] EXTERNAL EDIT DETECTED AND BLOCKED\n` +
+              `File: ${fullPath}\n` +
+              `This file was modified by an external program (VS Code, nano, vim, etc.)\n` +
+              `The change has been automatically reverted to protect the workspace.\n` +
+              `Files in this workspace can ONLY be edited within ScholarIDE.\n`,
+          );
+
+          // Revert to our snapshot
+          internalWritePaths.add(fullPath);
+          await fs.writeFile(fullPath, snapshot.content, "utf-8");
+          setTimeout(() => internalWritePaths.delete(fullPath), 100);
+
+          // Notify user
+          if (
+            mainWindow &&
+            !mainWindow.isDestroyed() &&
+            mainWindow.webContents &&
+            !mainWindow.webContents.isDestroyed()
+          ) {
+            try {
+              mainWindow.webContents.send("file-externally-modified", {
+                filePath: fullPath,
+                action: "reverted-modification",
+              });
+            } catch (e) {}
+          }
+        }
+      }
+    } else {
+      // New file created externally - track it but allow it
+      const content = await fs.readFile(fullPath, "utf-8");
+      fileSnapshots.set(fullPath, {
+        content,
+        mtime: stats.mtimeMs,
+        hash: hashContent(content),
+      });
+      console.log(`[FileTracker] New file tracked: ${fullPath}`);
+    }
+  } catch (error) {
+    console.error(`[FileTracker] Error handling file change:`, error);
+  }
+};
+
 const startWatching = (dirPath: string) => {
   if (currentWatcher) {
     currentWatcher.close();
     currentWatcher = null;
   }
+
+  // Initial scan to track all files
+  scanAndTrackFiles(dirPath).then(() => {
+    console.log(
+      `[FileTracker] Tracking ${fileSnapshots.size} files in workspace`,
+    );
+  });
+
   try {
     // Recursive watching is supported on macOS and Windows (mostly)
     currentWatcher = fsSync.watch(
       dirPath,
       { recursive: true },
-      (eventType, filename) => {
+      async (eventType, filename) => {
         const ignored = [
           "node_modules",
           ".git",
@@ -269,11 +747,25 @@ const startWatching = (dirPath: string) => {
           return;
         }
 
-        if (mainWindow) {
-          mainWindow.webContents.send("file-system-changed", {
-            eventType,
-            filename,
-          });
+        // Build full path
+        const fullPath = path.join(dirPath, filename);
+
+        // Handle the file change (check for external edits)
+        await handleFileChange(fullPath, eventType);
+
+        // Still send the event to renderer for UI updates
+        if (
+          mainWindow &&
+          !mainWindow.isDestroyed() &&
+          mainWindow.webContents &&
+          !mainWindow.webContents.isDestroyed()
+        ) {
+          try {
+            mainWindow.webContents.send("file-system-changed", {
+              eventType,
+              filename,
+            });
+          } catch (e) {}
         }
       },
     );
@@ -282,21 +774,20 @@ const startWatching = (dirPath: string) => {
   }
 };
 
+// Return the workspace path (no dialog - always use workspace)
 ipcMain.handle("open-directory", async () => {
-  const { dialog } = require("electron");
-  const result = await dialog.showOpenDialog({
-    properties: ["openDirectory"],
-  });
-  if (result.canceled) return null;
-  const dirPath = result.filePaths[0];
-  startWatching(dirPath);
-  return dirPath;
+  const workspacePath = getWorkspacePath();
+  startWatching(workspacePath);
+  return workspacePath;
 });
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.on("ready", createWindow);
+app.on("ready", async () => {
+  await initializeWorkspace();
+  createWindow();
+});
 
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits

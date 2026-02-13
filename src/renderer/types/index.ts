@@ -10,6 +10,7 @@ export interface ElectronAPI {
   writeFile: (path: string, content: string) => Promise<boolean>;
   createFile: (path: string) => Promise<boolean>;
   getAppPath: () => Promise<string>;
+  getWorkspacePath: () => Promise<string>;
   openDirectory: () => Promise<string | null>;
   onMenuOpenFolder: (callback: () => void) => () => void;
   onTerminalData: (callback: (data: string) => void) => () => void;
@@ -21,6 +22,11 @@ export interface ElectronAPI {
   onFileSystemChanged: (
     callback: (eventType: string, filename: string) => void,
   ) => () => void;
+  onFileExternallyModified: (
+    callback: (data: { filePath: string; action: string }) => void,
+  ) => () => void;
+  notifyFileOpened: (filePath: string) => void;
+  notifyFileClosed: (filePath: string) => void;
 }
 declare global {
   interface Window {
