@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { VscSend, VscClose, VscSparkle, VscAccount, VscRobot, VscLoading } from 'react-icons/vsc';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface Message {
     id: string;
@@ -169,10 +173,50 @@ const AiAgentPanel: React.FC<AiAgentPanelProps> = ({ onClose }) => {
                                 borderRadius: '8px',
                                 border: msg.role === 'user' ? 'none' : '1px solid #404040',
                                 maxWidth: '90%',
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word'
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                                whiteSpace: 'normal',
+                                wordBreak: 'break-word',
+                                transition: 'all 0.2s ease'
                             }}>
-                                {msg.content}
+                                <div className="markdown-content">
+                                    <ReactMarkdown
+                                        remarkPlugins={[remarkGfm]}
+                                        components={{
+                                            code({ node, inline, className, children, ...props }: any) {
+                                                const match = /language-(\w+)/.exec(className || '');
+                                                return !inline && match ? (
+                                                    <SyntaxHighlighter
+                                                        style={vscDarkPlus}
+                                                        language={match[1]}
+                                                        PreTag="div"
+                                                        {...props}
+                                                    >
+                                                        {String(children).replace(/\n$/, '')}
+                                                    </SyntaxHighlighter>
+                                                ) : (
+                                                    <code className={className} {...props}>
+                                                        {children}
+                                                    </code>
+                                                );
+                                            },
+                                            strong: ({ children }) => (
+                                                <strong style={{
+                                                    color: msg.role === 'user' ? '#fff' : '#4fc1ff',
+                                                    fontWeight: '800',
+                                                    background: msg.role === 'user' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(79, 193, 255, 0.1)',
+                                                    padding: '0 4px',
+                                                    borderRadius: '3px',
+                                                    border: msg.role === 'user' ? '1px solid rgba(255, 255, 255, 0.3)' : '1px solid rgba(79, 193, 255, 0.2)',
+                                                    textShadow: msg.role === 'user' ? '0 0 5px rgba(255,255,255,0.3)' : 'none'
+                                                }}>
+                                                    {children}
+                                                </strong>
+                                            )
+                                        }}
+                                    >
+                                        {msg.content}
+                                    </ReactMarkdown>
+                                </div>
                             </div>
                         </div>
                     ))
@@ -197,6 +241,56 @@ const AiAgentPanel: React.FC<AiAgentPanelProps> = ({ onClose }) => {
                 @keyframes spin {
                     from { transform: rotate(0deg); }
                     to { transform: rotate(360deg); }
+                }
+                .markdown-content p {
+                    margin-top: 0;
+                    margin-bottom: 12px;
+                }
+                .markdown-content p:last-child {
+                    margin-bottom: 0;
+                }
+                .markdown-content strong {
+                    color: #4fc1ff;
+                    font-weight: 700;
+                    background: rgba(79, 193, 255, 0.1);
+                    padding: 0 4px;
+                    border-radius: 3px;
+                    border: 1px solid rgba(79, 193, 255, 0.2);
+                }
+                .markdown-content ul, .markdown-content ol {
+                    padding-left: 20px;
+                    margin: 8px 0;
+                }
+                .markdown-content li {
+                    margin-bottom: 6px;
+                }
+                .markdown-content li::marker {
+                    color: #4fc1ff;
+                }
+                .markdown-content a {
+                    color: #4fc1ff;
+                    text-decoration: none;
+                }
+                .markdown-content a:hover {
+                    text-decoration: underline;
+                }
+                .markdown-content code:not(pre code) {
+                    background: rgba(255, 255, 255, 0.1);
+                    padding: 2px 5px;
+                    border-radius: 4px;
+                    font-family: 'Fira Code', monospace;
+                    font-size: 0.9em;
+                }
+                .markdown-content pre {
+                    margin: 12px 0 !important;
+                    background: #1e1e1e !important;
+                    border: 1px solid #333 !important;
+                    border-radius: 6px !important;
+                }
+                .markdown-content pre > div {
+                    background: transparent !important;
+                    padding: 10px !important;
+                    margin: 0 !important;
                 }
             `}</style>
 
