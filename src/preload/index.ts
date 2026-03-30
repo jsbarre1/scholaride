@@ -52,4 +52,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   notifyFileClosed: (filePath: string) =>
     ipcRenderer.send("file-closed", filePath),
   aiChat: (messages: any[]) => ipcRenderer.invoke("ai-chat", { messages }),
+  onOAuthCallback: (callback: (event: any, url: string) => void) => {
+    const listener = (event: any, url: string) => callback(event, url);
+    ipcRenderer.on("oauth-callback", listener);
+    return () => ipcRenderer.removeListener("oauth-callback", listener);
+  },
 });

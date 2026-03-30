@@ -1,8 +1,11 @@
 import { Configuration, ProvidePlugin, DefinePlugin } from "webpack";
+import * as dotenv from "dotenv";
 
 import { rendererRules as rules } from "./webpack.rules";
 import { plugins } from "./webpack.plugins";
 import MonacoWebpackPlugin from "monaco-editor-webpack-plugin";
+
+dotenv.config();
 
 rules.push({
   test: /\.css$/,
@@ -33,6 +36,8 @@ export const rendererConfig: Configuration = {
     new DefinePlugin({
       __dirname: JSON.stringify("/"),
       __filename: JSON.stringify("/index.html"),
+      "process.env.SUPABASE_URL": JSON.stringify(process.env.SUPABASE_URL || ""),
+      "process.env.SUPABASE_ANON_KEY": JSON.stringify(process.env.SUPABASE_ANON_KEY || ""),
     }),
   ],
   resolve: {

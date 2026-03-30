@@ -809,6 +809,14 @@ ipcMain.handle("open-directory", async () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.on("ready", async () => {
+  // Register deep link protocol for OAuth callbacks (e.g. scholaride://auth/callback)
+  if (process.defaultApp) {
+    // Development: pass the app path as an argument
+    app.setAsDefaultProtocolClient('scholaride', process.execPath, [app.getAppPath()]);
+  } else {
+    app.setAsDefaultProtocolClient('scholaride');
+  }
+
   await initializeWorkspace();
   createWindow();
   createPty(getWorkspacePath());
@@ -833,3 +841,26 @@ app.on("activate", () => {
 
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and import them here.
+
+// Handle macOS deep links (app already running)
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('oauth-callback', url);
+    } catch (e) {}
+  }
+});
+
+// Handle Windows/Linux deep links (second instance triggered)
+app.on('second-instance', (_event, commandLine) => {
+  const url = commandLine.find(arg => arg.startsWith('scholaride://'));
+  if (url && mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('oauth-callback', url);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    } catch (e) {}
+  }
+});
+

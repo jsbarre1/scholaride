@@ -11,7 +11,10 @@ import ActivityBar from './components/ActivityBar';
 import StatusBar from './components/StatusBar';
 import EditorArea from './components/EditorArea';
 import AiAgentPanel from './components/AiAgentPanel';
+import LoginScreen from './components/LoginScreen';
 import { ElectronAPI } from './types/index';
+import { useAuth } from './context/AuthContext';
+import { useStorageSync } from './hooks/useStorageSync';
 
 loader.config({
     monaco,
@@ -21,6 +24,7 @@ loader.config({
 });
 
 const App: React.FC = () => {
+    const { session, loading: authLoading, signOut } = useAuth();
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
     const [fileContent, setFileContent] = useState<string>('');
     const [language, setLanguage] = useState<string>('javascript');
@@ -28,6 +32,8 @@ const App: React.FC = () => {
     const [rootPath, setRootPath] = useState<string>('');
     const [isDirty, setIsDirty] = useState(false);
     const [showAiPanel, setShowAiPanel] = useState(false);
+
+    const { syncFileToCloud } = useStorageSync(rootPath);
 
     useEffect(() => {
         // Automatically open the workspace folder on start
@@ -141,6 +147,8 @@ const App: React.FC = () => {
                 await window.electronAPI.writeFile(selectedFile, fileContent);
                 setIsDirty(false);
                 console.log('File saved manually');
+                // Sync to Supabase Storage
+                syncFileToCloud(selectedFile, fileContent);
             } catch (error) {
                 console.error('Failed to save file:', error);
             }
@@ -159,6 +167,20 @@ const App: React.FC = () => {
 
     if (!(window as any).electronAPI) {
         return <div style={{ background: 'red', color: 'white', padding: '20px' }}>Electron API not found. Preload might have failed.</div>;
+    }
+
+    // Show loading spinner while restoring session
+    if (authLoading) {
+        return (
+            <div style={{ height: '100vh', width: '100vw', background: '#1e1e1e', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontSize: 13, fontFamily: 'system-ui' }}>
+                Loading…
+            </div>
+        );
+    }
+
+    // Gate the IDE behind authentication
+    if (!session) {
+        return <LoginScreen />;
     }
 
     return (

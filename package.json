@@ -28,6 +28,7 @@
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron-forge/plugin-webpack": "^7.11.1",
     "@electron/fuses": "^1.8.0",
+    "@types/dotenv": "^6.1.1",
     "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
@@ -36,6 +37,7 @@
     "buffer": "^6.0.3",
     "copy-webpack-plugin": "^13.0.1",
     "css-loader": "^6.11.0",
+    "dotenv": "^17.3.1",
     "electron": "40.2.1",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
@@ -50,6 +52,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@supabase/supabase-js": "^2.101.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "allotment": "^1.20.5",
     "diff2html": "^3.4.56",
