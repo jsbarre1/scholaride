@@ -41,20 +41,6 @@ The AI Tutor is powered by a **dedicated backend server** that proxies Claude's 
 
 ![System Architecture](./system_design.png)
 
-### Technology Breakdown
-
-| Layer | Technology |
-|-------|-----------|
-| Desktop shell | Electron 40 |
-| UI framework | React 19 + TypeScript |
-| Code editor | Monaco Editor |
-| File tree | react-arborist |
-| Terminal emulator | xterm.js + node-pty |
-| Bundler | Webpack (Electron Forge) |
-| Auth + Storage + DB | **Supabase** |
-| AI backend | **Dedicated server → Anthropic Claude API** |
-| Git integration | isomorphic-git |
-
 ### How the Sandbox Works
 
 The main process runs a **File Watcher + Snapshot Guard** that:
@@ -62,49 +48,6 @@ The main process runs a **File Watcher + Snapshot Guard** that:
 2. Watches for any filesystem change events
 3. If a change was NOT triggered internally by ScholarIDE → it is immediately reverted and the student is alerted
 4. The terminal is sandboxed to the workspace directory — `cd` outside it is blocked
-
-### Supabase Integration
-
-```
-Student logs in (email/password or OAuth)
-    ↓
-Supabase Auth → session token
-    ↓
-Workspace files downloaded from Storage (workspaces/{user_id}/)
-    ↓
-Every file save → uploaded to Storage
-    ↓ (future)
-Edit events → logged to Database (audit trail)
-```
-
-### AI Backend — Hints-Only Claude Proxy
-
-The current AI tutor hits `localhost:1234` (a local dev server). The planned production backend replaces this with a hardened API server that:
-
-1. **Authenticates the request** using the student's Supabase JWT — no anonymous queries
-2. **Injects a strict system prompt** before every Claude API call, e.g.:
-   > *"You are a coding tutor. Never write code for the student. Never give complete solutions. Always respond with guiding questions, conceptual explanations, and small hints that help the student figure out the answer themselves."*
-3. **Logs every query and response** to the `ai_interactions` table in Supabase with the student ID, timestamp, and full message history
-4. **Rate-limits** per student to prevent abuse
-5. **Supports instructor overrides** — per-assignment config can disable the tutor entirely or tighten the system prompt further
-
-```
-Student types question in AI Tutor panel
-    ↓
-ScholarIDE → POST /api/ai/chat  (with Supabase JWT)
-    ↓
-Backend validates JWT → fetches assignment config from DB
-    ↓
-Injects hints-only system prompt + student message
-    ↓
-Anthropick Claude API (claude-3-5-sonnet)
-    ↓
-Response returned + logged to ai_interactions table
-    ↓
-Hint displayed in AI Tutor panel
-```
-
----
 
 ## ERD — Data the Project Uses
 
