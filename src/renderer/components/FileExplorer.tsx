@@ -186,6 +186,35 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
         }
     };
 
+    const handleMove = async ({ dragIds, parentId }: { dragIds: string[]; parentId: string | null; index: number }) => {
+        // parentId is the destination folder path (or null for root)
+        const destDir = parentId ?? rootPath;
+        const movedPaths: string[] = [];
+
+        for (const srcPath of dragIds) {
+            const fileName = srcPath.split(/[/\\]/).pop();
+            if (!fileName) continue;
+
+            const destPath = `${destDir}/${fileName}`;
+
+            if (srcPath === destPath) continue; // dropped in same place
+
+            try {
+                await window.electronAPI.movePath(srcPath, destPath);
+                movedPaths.push(srcPath);
+                console.log('[FileExplorer] Moved:', srcPath, '→', destPath);
+            } catch (e) {
+                console.error('[FileExplorer] Failed to move:', srcPath, e);
+            }
+        }
+
+        // Refresh the tree after moves
+        if (movedPaths.length > 0) {
+            const rootEntries = await loadDirectory(rootPath);
+            setData(rootEntries);
+        }
+    };
+
     const getDisplayName = () => {
         if (!rootPath) return 'SCHOLARIDE';
         return 'WORKSPACE';
@@ -373,11 +402,12 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                             data={data || []}
                             openByDefault={false}
                             width={'100%'}
-                            height={1000} // Parent container will clip it
+                            height={1000}
                             indent={24}
                             rowHeight={24}
                             overscanCount={5}
                             onToggle={handleToggle}
+                            onMove={handleMove}
                             ref={treeRef}
                         >
                             {Node}

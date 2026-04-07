@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { Allotment } from 'allotment';
@@ -34,13 +34,21 @@ const App: React.FC = () => {
     const [showAiPanel, setShowAiPanel] = useState(false);
 
     const { syncFileToCloud, uploadWorkspace } = useStorageSync(rootPath);
+    // Flag set when user signs up so we can upload workspace after the session+workspace are ready
+    const pendingInitialUpload = useRef(false);
 
     // When user logs in: tell main process which user folder to use, then open workspace.
     // When user logs out: clear user from main process and reset state.
     useEffect(() => {
         if (session?.user) {
-            window.electronAPI.setUserId(session.user.id).then(() => {
-                handleOpenFolder();
+            window.electronAPI.setUserId(session.user.id).then(async () => {
+                await handleOpenFolder();
+                // If this is a brand-new sign-up, do the initial cloud upload now that
+                // the workspace path is set and the user has an active session.
+                if (pendingInitialUpload.current) {
+                    pendingInitialUpload.current = false;
+                    uploadWorkspace();
+                }
             });
         } else if (!authLoading) {
             // User logged out — clear the workspace from the UI
@@ -192,7 +200,7 @@ const App: React.FC = () => {
 
     // Gate the IDE behind authentication
     if (!session) {
-        return <LoginScreen onSignUpSuccess={() => uploadWorkspace()} />;
+        return <LoginScreen onSignUpSuccess={() => { pendingInitialUpload.current = true; }} />;
     }
 
     return (

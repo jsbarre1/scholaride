@@ -557,6 +557,35 @@ ipcMain.handle("get-app-path", () => {
   return app.getAppPath();
 });
 
+ipcMain.handle("move-path", async (event, sourcePath: string, destPath: string) => {
+  try {
+    const validatedSource = validatePath(sourcePath);
+    const validatedDest = validatePath(destPath);
+
+    // Ensure destination parent directory exists
+    await fs.mkdir(path.dirname(validatedDest), { recursive: true });
+
+    // Mark both paths as internal so the file watcher doesn't revert the move
+    internalWritePaths.add(validatedSource);
+    internalWritePaths.add(validatedDest);
+
+    await fs.rename(validatedSource, validatedDest);
+
+    // Update snapshots: remove old path, it will be re-tracked on next fs event
+    fileSnapshots.delete(validatedSource);
+
+    setTimeout(() => {
+      internalWritePaths.delete(validatedSource);
+      internalWritePaths.delete(validatedDest);
+    }, 200);
+
+    return true;
+  } catch (error) {
+    console.error("Error moving path:", error);
+    throw error;
+  }
+});
+
 // File tracking system to block external edits
 interface FileSnapshot {
   content: string;

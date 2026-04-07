@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   createDirectory: (path: string) =>
     ipcRenderer.invoke("create-directory", path),
   deletePath: (path: string) => ipcRenderer.invoke("delete-path", path),
+  movePath: (sourcePath: string, destPath: string) => ipcRenderer.invoke("move-path", sourcePath, destPath),
   onFileSystemChanged: (
     callback: (eventType: string, filename: string) => void,
   ) => {

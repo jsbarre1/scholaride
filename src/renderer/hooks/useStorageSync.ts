@@ -21,14 +21,23 @@ export const uploadFile = async (
     const path = storagePath(userId, workspacePath, filePath);
     const blob = new Blob([content], { type: 'text/plain' });
 
+    console.log('[StorageSync] Uploading to storage path:', path);
+
     const { error } = await supabase.storage
         .from(BUCKET)
         .upload(path, blob, { upsert: true });
 
     if (error) {
-        console.error('[StorageSync] Upload failed:', filePath, error.message);
+        console.error(
+            '[StorageSync] ❌ Upload failed:',
+            '\n  Local file:', filePath,
+            '\n  Storage path:', path,
+            '\n  Error:', error.message,
+            '\n  Status:', (error as any).statusCode,
+            '\n  Hint: Check Supabase Storage → Policies for the "workspaces" bucket.',
+        );
     } else {
-        console.log('[StorageSync] Uploaded:', path);
+        console.log('[StorageSync] ✅ Uploaded:', path);
     }
 };
 

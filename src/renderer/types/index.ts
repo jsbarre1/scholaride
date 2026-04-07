@@ -20,6 +20,7 @@ export interface ElectronAPI {
   setTerminalCwd: (cwd: string) => void;
   createDirectory: (path: string) => Promise<boolean>;
   deletePath: (path: string) => Promise<boolean>;
+  movePath: (sourcePath: string, destPath: string) => Promise<boolean>;
   onFileSystemChanged: (
     callback: (eventType: string, filename: string) => void,
   ) => () => void;
