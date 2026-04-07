@@ -7,7 +7,7 @@ interface AuthContextValue {
     user: User | null;
     loading: boolean;
     signIn: (email: string, password: string) => Promise<AuthError | null>;
-    signUp: (email: string, password: string) => Promise<AuthError | null>;
+    signUp: (email: string, password: string) => Promise<{ error: AuthError | null; isNewUser: boolean }>;
     signOut: () => Promise<void>;
 }
 
@@ -53,9 +53,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return error;
     };
 
-    const signUp = async (email: string, password: string): Promise<AuthError | null> => {
-        const { error } = await supabase.auth.signUp({ email, password });
-        return error;
+    const signUp = async (email: string, password: string): Promise<{ error: AuthError | null; isNewUser: boolean }> => {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        // Supabase returns a session immediately on sign-up (no email confirmation required by default)
+        const isNewUser = !error && !!data.user && !data.user.last_sign_in_at;
+        return { error, isNewUser };
     };
 
     const signOut = async () => {

@@ -33,16 +33,29 @@ const App: React.FC = () => {
     const [isDirty, setIsDirty] = useState(false);
     const [showAiPanel, setShowAiPanel] = useState(false);
 
-    const { syncFileToCloud } = useStorageSync(rootPath);
+    const { syncFileToCloud, uploadWorkspace } = useStorageSync(rootPath);
+
+    // When user logs in: tell main process which user folder to use, then open workspace.
+    // When user logs out: clear user from main process and reset state.
+    useEffect(() => {
+        if (session?.user) {
+            window.electronAPI.setUserId(session.user.id).then(() => {
+                handleOpenFolder();
+            });
+        } else if (!authLoading) {
+            // User logged out — clear the workspace from the UI
+            window.electronAPI.setUserId(null);
+            setRootPath('');
+            setSelectedFile(null);
+            setFileContent('');
+            setIsDirty(false);
+        }
+    }, [session?.user?.id, authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        // Automatically open the workspace folder on start
-        handleOpenFolder();
-
         const removeMenuListener = window.electronAPI.onMenuOpenFolder(() => {
             handleOpenFolder();
         });
-
         return () => {
             removeMenuListener();
         };
@@ -147,8 +160,7 @@ const App: React.FC = () => {
                 await window.electronAPI.writeFile(selectedFile, fileContent);
                 setIsDirty(false);
                 console.log('File saved manually');
-                // Sync to Supabase Storage
-                syncFileToCloud(selectedFile, fileContent);
+                // Note: upload to cloud is done manually via the Upload button in TitleBar
             } catch (error) {
                 console.error('Failed to save file:', error);
             }
@@ -180,7 +192,7 @@ const App: React.FC = () => {
 
     // Gate the IDE behind authentication
     if (!session) {
-        return <LoginScreen />;
+        return <LoginScreen onSignUpSuccess={() => uploadWorkspace()} />;
     }
 
     return (
@@ -198,6 +210,7 @@ const App: React.FC = () => {
                 selectedFile={selectedFile}
                 onAiToggle={() => setShowAiPanel(!showAiPanel)}
                 isAiActive={showAiPanel}
+                onUpload={uploadWorkspace}
             />
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -216,6 +229,7 @@ const App: React.FC = () => {
                                         rootPath={rootPath}
                                         onRefreshRequested={() => { }}
                                         onOpenFolder={handleOpenFolder}
+                                        onFileCreated={syncFileToCloud}
                                     />
                                 </Allotment.Pane>
                                 <Allotment.Pane>

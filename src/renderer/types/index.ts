@@ -12,6 +12,7 @@ export interface ElectronAPI {
   getAppPath: () => Promise<string>;
   getWorkspacePath: () => Promise<string>;
   openDirectory: () => Promise<string | null>;
+  setUserId: (userId: string | null) => Promise<string>;
   onMenuOpenFolder: (callback: () => void) => () => void;
   onTerminalData: (callback: (data: string) => void) => () => void;
   sendTerminalInput: (data: string) => void;

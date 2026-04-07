@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-const LoginScreen: React.FC = () => {
+interface LoginScreenProps {
+    onSignUpSuccess?: () => void;
+}
+
+const LoginScreen: React.FC<LoginScreenProps> = ({ onSignUpSuccess }) => {
     const { signIn, signUp } = useAuth();
     const [mode, setMode] = useState<'login' | 'signup'>('login');
     const [email, setEmail] = useState('');
@@ -20,16 +24,20 @@ const LoginScreen: React.FC = () => {
             const err = await signIn(email, password);
             if (err) setError(err.message);
         } else {
-            const err = await signUp(email, password);
+            const { error: err, isNewUser } = await signUp(email, password);
             if (err) {
                 setError(err.message);
             } else {
-                setInfo('Check your email to confirm your account, then log in.');
+                setInfo('Account created! Setting up your workspace…');
+                if (isNewUser && onSignUpSuccess) {
+                    onSignUpSuccess();
+                }
                 setMode('login');
             }
         }
         setLoading(false);
     };
+
 
     return (
         <div style={{

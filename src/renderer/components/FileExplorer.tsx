@@ -27,9 +27,10 @@ interface FileExplorerProps {
     rootPath: string;
     onRefreshRequested: () => void;
     onOpenFolder?: () => void;
+    onFileCreated?: (filePath: string, content: string) => void;
 }
 
-const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, rootPath, onRefreshRequested, onOpenFolder }) => {
+const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, rootPath, onRefreshRequested, onOpenFolder, onFileCreated }) => {
 
     const [data, setData] = useState<TreeData[]>([]);
     const [isCreating, setIsCreating] = useState(false);
@@ -149,6 +150,10 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
             const fullPath = `${basePath}/${newFileName}`;
             if (creationType === 'file') {
                 await window.electronAPI.createFile(fullPath);
+                // Upload the new (empty) file to cloud immediately
+                if (onFileCreated) {
+                    onFileCreated(fullPath, '');
+                }
             } else {
                 await window.electronAPI.createDirectory(fullPath);
             }
@@ -183,8 +188,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
 
     const getDisplayName = () => {
         if (!rootPath) return 'SCHOLARIDE';
-        const parts = rootPath.split(/[/\\]/);
-        return parts[parts.length - 1].toUpperCase();
+        return 'WORKSPACE';
     };
 
     const handleContextMenu = (e: React.MouseEvent, path: string) => {

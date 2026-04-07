@@ -19,10 +19,12 @@ let ptyProcess: any = null;
 let mainWindow: BrowserWindow | null = null;
 let currentTerminalCwd: string = "";
 let commandBuffer: string = "";
+let currentUserId: string | null = null;
 
-// Workspace directory - sandboxed location for user files
+// Workspace directory - sandboxed, scoped per signed-in user
 const getWorkspacePath = (): string => {
-  return path.join(app.getPath("userData"), "ScholarIDE-Workspace");
+  const base = path.join(app.getPath("userData"), "ScholarIDE-Workspace");
+  return currentUserId ? path.join(base, currentUserId) : base;
 };
 
 // Security: Validate that a path is within the workspace
@@ -805,6 +807,32 @@ ipcMain.handle("open-directory", async () => {
   return workspacePath;
 });
 
+// Called by the renderer when the user logs in or out.
+// Sets the active user ID so workspace paths become user-scoped.
+ipcMain.handle("set-user-id", async (_event, userId: string | null) => {
+  currentUserId = userId;
+  const workspacePath = getWorkspacePath();
+
+  if (userId) {
+    // Ensure the user's workspace directory exists
+    await fs.mkdir(workspacePath, { recursive: true });
+    // Seed a welcome file if the workspace is brand new
+    const welcomeFile = path.join(workspacePath, "welcome.md");
+    try {
+      await fs.access(welcomeFile);
+    } catch {
+      await fs.writeFile(
+        welcomeFile,
+        `# Welcome to ScholarIDE!\n\nThis is your personal workspace. Happy coding!\n`,
+        "utf-8",
+      );
+    }
+  }
+
+  currentTerminalCwd = workspacePath;
+  return workspacePath;
+});
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -816,6 +844,23 @@ app.on("ready", async () => {
   } else {
     app.setAsDefaultProtocolClient('scholaride');
   }
+
+  // Override the CSP header injected by the webpack dev server so that
+  // the renderer is allowed to connect to Supabase.
+  const { session } = require("electron");
+  session.defaultSession.webRequest.onHeadersReceived(
+    (details: Electron.OnHeadersReceivedListenerDetails, callback: (response: Electron.HeadersReceivedResponse) => void) => {
+    const supabaseUrl = process.env.SUPABASE_URL || "https://edepqvyytyygdztctzeq.supabase.co";
+    const supabaseWss = supabaseUrl.replace(/^http/, "ws");
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [
+          `default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ${supabaseUrl} ${supabaseWss}; worker-src 'self' blob:; font-src 'self' data:;`,
+        ],
+      },
+    });
+  });
 
   await initializeWorkspace();
   createWindow();

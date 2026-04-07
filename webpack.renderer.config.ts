@@ -37,7 +37,7 @@ export const rendererConfig: Configuration = {
       __dirname: JSON.stringify("/"),
       __filename: JSON.stringify("/index.html"),
       "process.env.SUPABASE_URL": JSON.stringify(process.env.SUPABASE_URL || ""),
-      "process.env.SUPABASE_ANON_KEY": JSON.stringify(process.env.SUPABASE_ANON_KEY || ""),
+      "process.env.SUPABASE_PUBLISHABLE_KEY": JSON.stringify(process.env.SUPABASE_PUBLISHABLE_KEY || ""),
     }),
   ],
   resolve: {

@@ -85,7 +85,7 @@ The main process runs a **File Watcher + Snapshot Guard** that:
 │ description                     │
 │ due_at                          │
 │ ai_tutor_allowed (bool)         │
-│ ai_system_prompt (text)         │
+│                                 │
 └─────────────────────────────────┘
          │
          │ referenced by
@@ -153,3 +153,101 @@ Full AI tutor logs stored in `ai_interactions`. Instructors can see every questi
 | Apr 8 | Assignment system — create, assign, distribute starter files |
 | Apr 9 | Polish UI + write README + record demo |
 | Apr 10 | **Final presentation / submission** |
+
+---
+
+## Cost Estimates
+
+### Model: `claude-haiku-4-5`
+
+Haiku is used instead of Sonnet because tutoring hints are short, focused responses — Haiku handles these well and is **3–5× cheaper**.
+
+| Model | Input / 1M tokens | Output / 1M tokens |
+|-------|------------------|-------------------|
+| claude-haiku-4-5 | $1.00 | $5.00 |
+
+### Monthly Cost — 30 Students
+
+> 30 students × 10 sessions × 20 queries = **6,000 queries/month**
+
+| Service | Monthly Cost |
+|---------|-------------|
+| Anthropic (`claude-haiku-4-5`) | $10.80 |
+| AWS Lambda + API Gateway | $1.50 |
+| Supabase Pro | $25.00 |
+| **Total** | **~$37.30/month** |
+| **Per student** | **~$1.24/month** |
+
+### Supabase Tier Breakdown
+
+| Resource | Pro Includes | ScholarIDE @ 2,000 students | Overage cost | Overage? |
+|----------|-------------|----------------------------|-------------|----------|
+| MAU | 100,000 | 2,000 | $0.00325/MAU | ✅ $0 |
+| File storage | 100 GB | ~10 GB (2k × 5 MB workspaces) | $0.021/GB | ✅ $0 |
+| DB disk | 8 GB | ~3 GB (audit logs + AI rows) | $0.125/GB | ✅ $0 |
+| Egress | 250 GB | ~10 GB (workspace restores) | $0.09/GB | ✅ $0 |
+| Cached egress | 250 GB | minimal | $0.03/GB | ✅ $0 |
+
+> **All realistic ScholarIDE workloads fit comfortably inside Supabase Pro's included limits up to 2,000+ students.** The $600/month Team tier is only relevant for institutional features (SSO, multi-org management, compliance) — not for capacity.
+
+### Scaling Projections
+
+| Students | Anthropic | AWS | Supabase | Total/mo | Per Student |
+|----------|-----------|-----|----------|----------|-------------|
+| 30 | $10.80 | $1.50 | $25 (Pro) | **~$37** | **~$1.24** |
+| 150 | $54 | $7 | $25 (Pro) | **~$86** | **~$0.57** |
+| 500 | $180 | $22 | $25 (Pro) | **~$227** | **~$0.45** |
+| 2,000 | $720 | $85 | $25 (Pro) | **~$830** | **~$0.42** |
+| **100,000** | **$36,000** | **$574** | **$611 (Team)** | **~$37,185** | **~$0.37** |
+
+> Supabase stays at $25 (Pro) up to ~2,000 students because ScholarIDE's data is text-only and tiny. Team ($599) only becomes relevant at institutional scale or for compliance features (SOC2, SSO, HIPAA).
+
+---
+### Cost Mitigation at Scale
+
+| Strategy | Impact |
+|----------|--------|
+| Cap queries at 10/session (half current assumption) | Cuts Anthropic bill to **~$18,000/mo** |
+| Cap queries at 5/session | Cuts to **~$9,000/mo** |
+| Cache common conceptual answers (e.g. "what is a loop?") | ~10–20% reduction |
+| Negotiate Anthropic volume pricing at this scale | Custom pricing available |
+| Shorten system prompt by 100 tokens | Saves $2,000/mo at 100K MAU |
+
+
+
+---
+
+## Scaling Bottlenecks
+
+| System | Bottleneck | 
+|--------|-----------|
+| **Anthropic API** | Rate limits hit when 30+ students query simultaneously during exams | 
+| **Supabase Storage** | Burst of concurrent file uploads when all students save at once | 
+| **Supabase Realtime** | Free tier caps at 200 concurrent WebSocket connections | 
+| **Database growth** | `audit_logs` and `ai_interactions` grow unboundedly with usage | 
+| **Electron distribution** | Every student needs a platform-specific app | 
+
+---
+
+## Durability
+
+| System | Durability |
+|--------|-----------|
+| **Supabase Storage** | S3-backed — 99.999999999% object durability | 
+| **Supabase Database** | Managed Postgres with daily snapshots | 
+| **AWS AI Backend** | Stateless — no data lives on the server | 
+| **Local workspace** | Stored in Electron `userData` dir | 
+| **Auth tokens** | Supabase JWTs cached locally; valid for up to 1hr | 
+
+If a student loses network during an exam, file saves accumulate locally but never reach the cloud.
+---
+
+## Recoverability
+
+| Failure Scenario | Recovery Steps | 
+|-----------------|---------------|
+| **Student's machine dies** | Log in on any new machine → workspace auto-downloads from Supabase Storage |
+| **AWS AI backend down** | IDE remains fully usable; AI Tutor shows error. Lambda auto-recovers instantly; EC2 restarts in ~3–5 min |
+| **Supabase outage** | Students coast on cached auth tokens (up to 1hr); saves queue locally | 
+| **DB corruption / bad deploy** | Supabase Point in Time Recovery (Pro): restore to any point in last 7 days | 
+| **File accidentally deleted** | Restore from Supabase Storage version history or DB snapshot | 
