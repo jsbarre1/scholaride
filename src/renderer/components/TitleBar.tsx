@@ -92,10 +92,10 @@ const TitleBar = ({ selectedFile, onAiToggle, isAiActive, onUpload }: TitleBarPr
                         border: '1px solid rgba(78,201,240,0.25)',
                         opacity: uploading ? 0.7 : 1,
                     } as React.CSSProperties}
-                    title="Upload workspace to cloud"
+                    title="Sync workspace to Supabase"
                 >
                     <VscCloudUpload size={12} />
-                    {uploading ? 'Uploading…' : 'Upload'}
+                    {uploading ? 'Syncing…' : 'Sync'}
                 </div>
             </div>
         </div>

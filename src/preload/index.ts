@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getWorkspacePath: () => ipcRenderer.invoke("get-workspace-path"),
   openDirectory: () => ipcRenderer.invoke("open-directory"),
   setUserId: (userId: string | null) => ipcRenderer.invoke("set-user-id", userId),
+  setClassId: (classId: string | null, className?: string | null) => ipcRenderer.invoke("set-class-id", classId, className),
   onMenuOpenFolder: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on("menu-open-folder", listener);

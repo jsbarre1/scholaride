@@ -8,10 +8,14 @@ import {
     VscChevronRight,
     VscChevronDown,
     VscFolderOpened,
-    VscFile
+    VscFile,
+    VscCloudDownload
 } from 'react-icons/vsc';
 import { getFileIcon, getIconColor } from '../utils/icons';
 import { FileEntry } from '../types/index';
+import { useClass } from '../context/ClassContext';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 
 interface TreeData {
     id: string;
@@ -28,9 +32,10 @@ interface FileExplorerProps {
     onRefreshRequested: () => void;
     onOpenFolder?: () => void;
     onFileCreated?: (filePath: string, content: string) => void;
+    onFileMoved?: (oldPath: string, newPath: string) => void;
 }
 
-const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, rootPath, onRefreshRequested, onOpenFolder, onFileCreated }) => {
+const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, rootPath, onRefreshRequested, onOpenFolder, onFileCreated, onFileMoved }) => {
 
     const [data, setData] = useState<TreeData[]>([]);
     const [isCreating, setIsCreating] = useState(false);
@@ -39,6 +44,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
     const [creationType, setCreationType] = useState<'file' | 'directory'>('file');
     const [lastExpandedPath, setLastExpandedPath] = useState<string | null>(null);
+    const { currentClass } = useClass();
+    const { user } = useAuth();
 
     useEffect(() => {
         setLastExpandedPath(rootPath);
@@ -89,7 +96,11 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                     isDirectory: entry.isDirectory,
                     children: entry.isDirectory ? [] : undefined
                 }));
-        } catch (error) {
+        } catch (error: any) {
+            // If the folder was just deleted, ignore ENOENT errors
+            if (error.message?.includes('ENOENT')) {
+                return [];
+            }
             console.error('Failed to load directory:', error);
             return [];
         }
@@ -146,7 +157,19 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
             return;
         }
         try {
-            const basePath = lastExpandedPath || rootPath;
+            let basePath = lastExpandedPath || rootPath;
+            
+            // Safety check: ensure the parent still exists
+            // Get parent directory manually since 'path' is not available in renderer
+            const parentDir = basePath.split(/[/\\]/).slice(0, -1).join('/') || '/';
+            const entries = await window.electronAPI.listDirectory(parentDir);
+            const parentExists = entries.some(e => e.path === basePath);
+            
+            if (!parentExists && basePath !== rootPath) {
+                console.warn('[FileExplorer] Target parent no longer exists, falling back to root');
+                basePath = rootPath;
+            }
+
             const fullPath = `${basePath}/${newFileName}`;
             if (creationType === 'file') {
                 await window.electronAPI.createFile(fullPath);
@@ -178,6 +201,12 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
     const handleDelete = async (path: string) => {
         try {
             await window.electronAPI.deletePath(path);
+            
+            // Fix: If we just deleted the folder we were focused on, reset focus to root
+            if (lastExpandedPath === path || lastExpandedPath?.startsWith(path + '/')) {
+                setLastExpandedPath(rootPath);
+            }
+
             // Refresh parent or root
             const rootEntries = await loadDirectory(rootPath);
             setData(rootEntries);
@@ -203,6 +232,11 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                 await window.electronAPI.movePath(srcPath, destPath);
                 movedPaths.push(srcPath);
                 console.log('[FileExplorer] Moved:', srcPath, '→', destPath);
+                
+                // Trigger cloud move sync
+                if (onFileMoved) {
+                    onFileMoved(srcPath, destPath);
+                }
             } catch (e) {
                 console.error('[FileExplorer] Failed to move:', srcPath, e);
             }
@@ -217,6 +251,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
 
     const getDisplayName = () => {
         if (!rootPath) return 'SCHOLARIDE';
+        if (currentClass?.name) return `WORKSPACE FOR ${currentClass.name.toUpperCase()}`;
         return 'WORKSPACE';
     };
 
@@ -224,6 +259,48 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
         e.preventDefault();
         e.stopPropagation();
         setContextMenu({ x: e.clientX, y: e.clientY, path });
+    };
+
+    const handleRestoreFromCloud = async (pathOnDisk: string) => {
+        if (!user || !rootPath) return;
+
+        // Calculate relative path for DB lookup (CS101/main.py)
+        // Note: rootPath is /Users/.../ScholarIDE-Workspace/user_id/Class_Name
+        // On disk files are at /Users/.../ScholarIDE-Workspace/user_id/Class_Name/CS101/main.py
+        
+        // Actually, we need to know the parent root to calculate accurately.
+        // We'll use the user's base folder if we have it, or just use the last parts.
+        const pathParts = pathOnDisk.split(/[/\\]/);
+        const workspaceName = rootPath.split(/[/\\]/).pop();
+        const workspaceIndex = pathParts.indexOf(workspaceName!);
+        
+        const relPath = pathParts.slice(workspaceIndex + 1).join('/');
+
+        if (!confirm(`Are you sure you want to restore "${relPath}" from the cloud? This will overwrite your local file.`)) {
+            return;
+        }
+
+        try {
+            console.log('[FileExplorer] Fetching latest snapshot for:', relPath);
+            const { data, error } = await supabase
+                .from('file_snapshots')
+                .select('content')
+                .eq('user_id', user.id)
+                .eq('file_path', relPath)
+                .order('saved_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (error) throw error;
+            if (!data) throw new Error('No cloud snapshots found for this file.');
+
+            await window.electronAPI.writeFile(pathOnDisk, data.content);
+            alert('File restored successfully from cloud!');
+            onRefreshRequested();
+        } catch (error: any) {
+            console.error('Failed to restore from cloud:', error);
+            alert(`Restore failed: ${error.message}`);
+        }
     };
 
     const Node = ({ node, style, dragHandle }: NodeRendererProps<TreeData>) => {
@@ -439,6 +516,20 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                             >
                                 <span style={{ marginRight: '8px' }}>🗑️</span> Delete
                             </div>
+                            {!data.find(d => d.id === contextMenu.path)?.isDirectory && (
+                                <div
+                                    style={{ padding: '4px 12px', fontSize: '13px', cursor: 'pointer', color: '#4ec9f0', display: 'flex', alignItems: 'center' }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRestoreFromCloud(contextMenu.path);
+                                        setContextMenu(null);
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#094771'}
+                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                >
+                                    <VscCloudDownload size={14} style={{ marginRight: '8px' }} /> Restore from Cloud
+                                </div>
+                            )}
                         </div>
                     )}
                 </>

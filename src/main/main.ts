@@ -20,19 +20,30 @@ let mainWindow: BrowserWindow | null = null;
 let currentTerminalCwd: string = "";
 let commandBuffer: string = "";
 let currentUserId: string | null = null;
+let currentClassName: string | null = null;
 
-// Workspace directory - sandboxed, scoped per signed-in user
+// The IDE root is scoped to the specific class:
+// ScholarIDE-Workspace/{userId}/{ClassName}/
 const getWorkspacePath = (): string => {
   const base = path.join(app.getPath("userData"), "ScholarIDE-Workspace");
-  return currentUserId ? path.join(base, currentUserId) : base;
+  if (!currentUserId) return base;
+
+  const userBase = path.join(base, currentUserId);
+  if (currentClassName) {
+    const safeClassName = currentClassName.replace(/[^a-z0-9]/gi, "_");
+    return path.join(userBase, safeClassName);
+  }
+  return userBase;
 };
 
 // Security: Validate that a path is within the workspace
 const validatePath = (targetPath: string): string => {
-  const workspacePath = getWorkspacePath();
+  const base = path.join(app.getPath("userData"), "ScholarIDE-Workspace");
+  const validationRoot = currentUserId ? path.join(base, currentUserId) : base;
+
   const resolvedPath = path.resolve(targetPath);
 
-  if (!resolvedPath.startsWith(workspacePath)) {
+  if (!resolvedPath.startsWith(validationRoot)) {
     throw new Error("Access denied: Path is outside workspace");
   }
 
@@ -427,14 +438,20 @@ ipcMain.handle("list-directory", async (event, dirPath) => {
     const validatedPath = validatePath(absolutePath);
     const entries = await fs.readdir(validatedPath, { withFileTypes: true });
     return entries
-      .filter((entry) => !entry.name.startsWith("."))
+      .filter(
+        (entry) =>
+          !entry.name.startsWith(".") &&
+          !entry.name.endsWith(".scholaride.hash"),
+      )
       .map((entry) => ({
         name: entry.name,
         isDirectory: entry.isDirectory(),
         path: path.resolve(validatedPath, entry.name),
       }));
-  } catch (error) {
-    console.error("Error listing directory:", error);
+  } catch (error: any) {
+    if (error.code !== "ENOENT") {
+      console.error("Error listing directory:", error);
+    }
     return [];
   }
 });
@@ -464,14 +481,16 @@ ipcMain.handle("write-file", async (event, filePath, content) => {
       hash: hashContent(content),
     });
 
+    const hash = hashContent(content);
     await fs.writeFile(validatedPath, content, "utf-8");
+    await saveIntegrityHash(validatedPath, content);
 
     // Update the snapshot with actual mtime after write
     const stats = await fs.stat(validatedPath);
     fileSnapshots.set(validatedPath, {
       content,
       mtime: stats.mtimeMs,
-      hash: hashContent(content),
+      hash,
     });
 
     // Remove from internal write set after a brief delay
@@ -500,13 +519,15 @@ ipcMain.handle("create-file", async (event, filePath) => {
     });
 
     await fs.writeFile(validatedPath, "", "utf-8");
+    await saveIntegrityHash(validatedPath, "");
 
     // Update the snapshot with actual mtime
     const stats = await fs.stat(validatedPath);
+    const hash = hashContent("");
     fileSnapshots.set(validatedPath, {
       content: "",
       mtime: stats.mtimeMs,
-      hash: hashContent(""),
+      hash,
     });
 
     // Remove from internal write set after a brief delay
@@ -538,13 +559,25 @@ ipcMain.handle("delete-path", async (event, targetPath) => {
 
     // Mark this path as being deleted internally
     internalWritePaths.add(validatedPath);
+    // 1. Also try to delete the integrity sidecar if it exists
+    try {
+      const dirname = path.dirname(validatedPath);
+      const basename = path.basename(validatedPath);
+      const sidecarPath = path.join(dirname, `.${basename}.scholaride.hash`);
+      if (fsSync.existsSync(sidecarPath)) {
+        await fs.unlink(sidecarPath);
+      }
+    } catch (e) {
+      // Safe to ignore
+    }
+    
     await shell.trashItem(validatedPath);
 
     // Remove from tracking
     fileSnapshots.delete(validatedPath);
 
-    // Remove from internal write set after a brief delay
-    setTimeout(() => internalWritePaths.delete(validatedPath), 100);
+    // Remove from internal write set after 1 second to give Chokidar time to settle
+    setTimeout(() => internalWritePaths.delete(validatedPath), 1000);
     return true;
   } catch (error) {
     if (validatedPath) internalWritePaths.delete(validatedPath);
@@ -557,41 +590,47 @@ ipcMain.handle("get-app-path", () => {
   return app.getAppPath();
 });
 
-ipcMain.handle("move-path", async (event, sourcePath: string, destPath: string) => {
-  try {
-    const validatedSource = validatePath(sourcePath);
-    const validatedDest = validatePath(destPath);
-
-    // Ensure destination parent directory exists
-    await fs.mkdir(path.dirname(validatedDest), { recursive: true });
-
-    // Mark both paths as internal so the file watcher doesn't revert the move
-    internalWritePaths.add(validatedSource);
-    internalWritePaths.add(validatedDest);
-
-    await fs.rename(validatedSource, validatedDest);
-
-    // Update snapshots: remove old path, it will be re-tracked on next fs event
-    fileSnapshots.delete(validatedSource);
-
-    setTimeout(() => {
-      internalWritePaths.delete(validatedSource);
-      internalWritePaths.delete(validatedDest);
-    }, 200);
-
-    return true;
-  } catch (error) {
-    console.error("Error moving path:", error);
-    throw error;
-  }
-});
-
 // File tracking system to block external edits
+// Now includes offline integrity via hidden sidecar files
 interface FileSnapshot {
   content: string;
   mtime: number;
   hash: string;
 }
+
+const getIntegrityPath = (filePath: string) => {
+  const dir = path.dirname(filePath);
+  const name = path.basename(filePath);
+  return path.join(dir, `.${name}.scholaride.hash`);
+};
+
+const saveIntegrityHash = async (filePath: string, content: string) => {
+  try {
+    const integrityPath = getIntegrityPath(filePath);
+    const hash = hashContent(content);
+    await fs.writeFile(integrityPath, hash, "utf-8");
+    // On Mac, make it hidden if it's not already starting with '.' (redundant but safe)
+    if (process.platform === "darwin") {
+      try {
+        const { exec } = require("child_process");
+        exec(`chflags hidden "${integrityPath}"`);
+      } catch (e) {}
+    }
+  } catch (e) {
+    console.error("Failed to save integrity hash:", e);
+  }
+};
+
+const getStoredIntegrityHash = async (
+  filePath: string,
+): Promise<string | null> => {
+  try {
+    const integrityPath = getIntegrityPath(filePath);
+    return await fs.readFile(integrityPath, "utf-8");
+  } catch {
+    return null;
+  }
+};
 
 const fileSnapshots = new Map<string, FileSnapshot>();
 const internalWritePaths = new Set<string>();
@@ -609,10 +648,10 @@ ipcMain.on("file-closed", (event, filePath) => {
   console.log(`[FileTracker] File closed: ${filePath}`);
 });
 
-// Generate a simple hash for file content
+// Generate a SHA-256 hash for file content (matches Supabase server-side hash)
 const hashContent = (content: string): string => {
   const crypto = require("crypto");
-  return crypto.createHash("md5").update(content).digest("hex");
+  return crypto.createHash("sha256").update(content).digest("hex");
 };
 
 // Scan and track all files in the workspace
@@ -642,14 +681,49 @@ const scanAndTrackFiles = async (dirPath: string): Promise<void> => {
 
       if (entry.isDirectory()) {
         await scanAndTrackFiles(fullPath);
-      } else if (entry.isFile()) {
+      } else if (entry.isFile() && !entry.name.endsWith(".scholaride.hash")) {
         try {
           const content = await fs.readFile(fullPath, "utf-8");
           const stats = await fs.stat(fullPath);
+          const currentHash = hashContent(content);
+          const storedHash = await getStoredIntegrityHash(fullPath);
+
+          if (storedHash && currentHash !== storedHash) {
+            console.warn(
+              `[Integrity] OFFLINE TAMPERING detected for: ${fullPath}`,
+            );
+
+            // Notify the UI immediately, including the expected hash for precise restoration
+            if (
+              mainWindow &&
+              !mainWindow.isDestroyed() &&
+              mainWindow.webContents
+            ) {
+              mainWindow.webContents.send("file-externally-modified", {
+                filePath: fullPath,
+                action: "offline-tampering",
+                expectedHash: storedHash,
+              });
+            }
+          } else if (!storedHash) {
+             // NO INTEGRITY RECORD: This file was likely added while the IDE was closed.
+             console.warn(`[Integrity] UNKNOWN FILE detected on startup: ${fullPath}`);
+             if (
+              mainWindow &&
+              !mainWindow.isDestroyed() &&
+              mainWindow.webContents
+            ) {
+              mainWindow.webContents.send("file-externally-modified", {
+                filePath: fullPath,
+                action: "unknown-file-detected",
+              });
+            }
+          }
+
           fileSnapshots.set(fullPath, {
             content,
             mtime: stats.mtimeMs,
-            hash: hashContent(content),
+            hash: currentHash,
           });
         } catch (error) {
           // Skip files that can't be read (binary, etc.)
@@ -661,18 +735,30 @@ const scanAndTrackFiles = async (dirPath: string): Promise<void> => {
   }
 };
 
+// Helper to check if a path (or its parent) is currently being modified internally
+const isPathWhitelisted = (fullPath: string): boolean => {
+  for (const internalPath of internalWritePaths) {
+    if (
+      fullPath === internalPath ||
+      fullPath.startsWith(internalPath + path.sep)
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
 // Check if a file change was external and revert if needed
 const handleFileChange = async (
   fullPath: string,
   eventType: string,
 ): Promise<void> => {
-  // Ignore if this path is being written internally
-  if (internalWritePaths.has(fullPath)) {
+  // Ignore if this path or its parent is being written internally
+  if (isPathWhitelisted(fullPath)) {
     return;
   }
 
   try {
-    // Check if file exists
     const exists = fsSync.existsSync(fullPath);
 
     if (!exists) {
@@ -712,6 +798,12 @@ const handleFileChange = async (
 
     // File was modified or created
     const stats = await fs.stat(fullPath);
+
+    // Skip directories and the hidden integrity files themselves
+    if (!stats.isFile() || fullPath.endsWith(".scholaride.hash")) {
+      return;
+    }
+
     const snapshot = fileSnapshots.get(fullPath);
 
     if (snapshot) {
@@ -752,14 +844,15 @@ const handleFileChange = async (
         }
       }
     } else {
-      // New file created externally - track it but allow it
-      const content = await fs.readFile(fullPath, "utf-8");
-      fileSnapshots.set(fullPath, {
-        content,
-        mtime: stats.mtimeMs,
-        hash: hashContent(content),
-      });
-      console.log(`[FileTracker] New file tracked: ${fullPath}`);
+      // New file created externally - FLAG FOR VERIFICATION
+      console.log(`[FileTracker] Unknown file appearance: ${fullPath}. Requesting cloud verification…`);
+      
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+        mainWindow.webContents.send("file-externally-modified", {
+          filePath: fullPath,
+          action: "unknown-file-detected",
+        });
+      }
     }
   } catch (error) {
     console.error(`[FileTracker] Error handling file change:`, error);
@@ -836,31 +929,50 @@ ipcMain.handle("open-directory", async () => {
   return workspacePath;
 });
 
-// Called by the renderer when the user logs in or out.
-// Sets the active user ID so workspace paths become user-scoped.
+// Called when the user logs in/out. Resets class context on logout.
 ipcMain.handle("set-user-id", async (_event, userId: string | null) => {
   currentUserId = userId;
+  currentClassName = null; // Reset class name on user change
   const workspacePath = getWorkspacePath();
 
   if (userId) {
-    // Ensure the user's workspace directory exists
     await fs.mkdir(workspacePath, { recursive: true });
-    // Seed a welcome file if the workspace is brand new
-    const welcomeFile = path.join(workspacePath, "welcome.md");
-    try {
-      await fs.access(welcomeFile);
-    } catch {
-      await fs.writeFile(
-        welcomeFile,
-        `# Welcome to ScholarIDE!\n\nThis is your personal workspace. Happy coding!\n`,
-        "utf-8",
-      );
-    }
   }
 
   currentTerminalCwd = workspacePath;
   return workspacePath;
 });
+
+// Called once the student has joined a class.
+// Switches the IDE root to the specific class sub-folder.
+ipcMain.handle(
+  "set-class-id",
+  async (_event, classId: string | null, className?: string | null) => {
+    currentClassName = className || null;
+    const workspacePath = getWorkspacePath();
+
+    if (currentUserId && className) {
+      await fs.mkdir(workspacePath, { recursive: true });
+
+      // Seed a welcome file in the class folder if empty
+      const welcomeFile = path.join(workspacePath, "welcome.md");
+      try {
+        await fs.access(welcomeFile);
+      } catch {
+        const welcomeContent = `# Welcome to ${className}\n\nThis is your focused workspace for this class.\n`;
+        await fs.writeFile(welcomeFile, welcomeContent, "utf-8");
+        await saveIntegrityHash(welcomeFile, welcomeContent);
+      }
+    }
+
+    currentTerminalCwd = workspacePath;
+    
+    // CRITICAL: Re-initialize and scan the new class folder for offline changes
+    await initializeWorkspace();
+    
+    return workspacePath;
+  },
+);
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
@@ -869,27 +981,34 @@ app.on("ready", async () => {
   // Register deep link protocol for OAuth callbacks (e.g. scholaride://auth/callback)
   if (process.defaultApp) {
     // Development: pass the app path as an argument
-    app.setAsDefaultProtocolClient('scholaride', process.execPath, [app.getAppPath()]);
+    app.setAsDefaultProtocolClient("scholaride", process.execPath, [
+      app.getAppPath(),
+    ]);
   } else {
-    app.setAsDefaultProtocolClient('scholaride');
+    app.setAsDefaultProtocolClient("scholaride");
   }
 
   // Override the CSP header injected by the webpack dev server so that
   // the renderer is allowed to connect to Supabase.
   const { session } = require("electron");
   session.defaultSession.webRequest.onHeadersReceived(
-    (details: Electron.OnHeadersReceivedListenerDetails, callback: (response: Electron.HeadersReceivedResponse) => void) => {
-    const supabaseUrl = process.env.SUPABASE_URL || "https://edepqvyytyygdztctzeq.supabase.co";
-    const supabaseWss = supabaseUrl.replace(/^http/, "ws");
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        "Content-Security-Policy": [
-          `default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ${supabaseUrl} ${supabaseWss}; worker-src 'self' blob:; font-src 'self' data:;`,
-        ],
-      },
-    });
-  });
+    (
+      details: Electron.OnHeadersReceivedListenerDetails,
+      callback: (response: Electron.HeadersReceivedResponse) => void,
+    ) => {
+      const supabaseUrl =
+        process.env.SUPABASE_URL || "https://edepqvyytyygdztctzeq.supabase.co";
+      const supabaseWss = supabaseUrl.replace(/^http/, "ws");
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          "Content-Security-Policy": [
+            `default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ${supabaseUrl} ${supabaseWss}; worker-src 'self' blob:; font-src 'self' data:;`,
+          ],
+        },
+      });
+    },
+  );
 
   await initializeWorkspace();
   createWindow();
@@ -916,25 +1035,87 @@ app.on("activate", () => {
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and import them here.
 
-// Handle macOS deep links (app already running)
-app.on('open-url', (event, url) => {
-  event.preventDefault();
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+ipcMain.removeHandler("move-path");
+ipcMain.handle(
+  "move-path",
+  async (_event, oldPath: string, newPath: string) => {
     try {
-      mainWindow.webContents.send('oauth-callback', url);
+      const validatedOld = validatePath(oldPath);
+      const validatedNew = validatePath(newPath);
+
+      // 1. Mark both paths as internal to prevent self-healing from thinking it's a delete/create cycle
+      internalWritePaths.add(validatedOld);
+      internalWritePaths.add(validatedNew);
+
+      // 2. Ensure destination directory exists
+      await fs.mkdir(path.dirname(validatedNew), { recursive: true });
+
+      // 3. Rename the actual file/folder
+      await fs.rename(validatedOld, validatedNew);
+
+      // 4. Update snapshots
+      const oldSnapshot = fileSnapshots.get(validatedOld);
+      if (oldSnapshot) {
+        fileSnapshots.set(validatedNew, oldSnapshot);
+        fileSnapshots.delete(validatedOld);
+      }
+
+      // 5. If it's a file, try to rename the integrity sidecar too
+      const oldDir = path.dirname(validatedOld);
+      const oldBase = path.basename(validatedOld);
+      const oldSidecar = path.join(oldDir, `.${oldBase}.scholaride.hash`);
+
+      const newDir = path.dirname(validatedNew);
+      const newBase = path.basename(validatedNew);
+      const newSidecar = path.join(newDir, `.${newBase}.scholaride.hash`);
+
+      try {
+        if (fsSync.existsSync(oldSidecar)) {
+          await fs.rename(oldSidecar, newSidecar);
+        }
+      } catch (e) {
+        console.warn("[Integrity] Could not move sidecar:", e);
+      }
+
+      // Cleanup whitelisting after events process
+      setTimeout(() => {
+        internalWritePaths.delete(validatedOld);
+        internalWritePaths.delete(validatedNew);
+      }, 1000);
+
+      return true;
+    } catch (error: any) {
+      internalWritePaths.delete(oldPath);
+      internalWritePaths.delete(newPath);
+      console.error("Error moving path:", error);
+      throw error;
+    }
+  },
+);
+
+// Handle macOS deep links (app already running)
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.webContents &&
+    !mainWindow.webContents.isDestroyed()
+  ) {
+    try {
+      mainWindow.webContents.send("oauth-callback", url);
     } catch (e) {}
   }
 });
 
 // Handle Windows/Linux deep links (second instance triggered)
-app.on('second-instance', (_event, commandLine) => {
-  const url = commandLine.find(arg => arg.startsWith('scholaride://'));
+app.on("second-instance", (_event, commandLine) => {
+  const url = commandLine.find((arg) => arg.startsWith("scholaride://"));
   if (url && mainWindow && !mainWindow.isDestroyed()) {
     try {
-      mainWindow.webContents.send('oauth-callback', url);
+      mainWindow.webContents.send("oauth-callback", url);
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     } catch (e) {}
   }
 });
-

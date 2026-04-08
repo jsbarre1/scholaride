@@ -4,6 +4,12 @@ export interface FileEntry {
   path: string;
 }
 
+export enum UserRole {
+  ADMIN = "admin",
+  INSTRUCTOR = "instructor",
+  STUDENT = "student",
+}
+
 export interface ElectronAPI {
   listDirectory: (path: string) => Promise<FileEntry[]>;
   readFile: (path: string) => Promise<string>;
@@ -13,6 +19,10 @@ export interface ElectronAPI {
   getWorkspacePath: () => Promise<string>;
   openDirectory: () => Promise<string | null>;
   setUserId: (userId: string | null) => Promise<string>;
+  setClassId: (
+    classId: string | null,
+    className?: string | null,
+  ) => Promise<string>;
   onMenuOpenFolder: (callback: () => void) => () => void;
   onTerminalData: (callback: (data: string) => void) => () => void;
   sendTerminalInput: (data: string) => void;
@@ -25,7 +35,11 @@ export interface ElectronAPI {
     callback: (eventType: string, filename: string) => void,
   ) => () => void;
   onFileExternallyModified: (
-    callback: (data: { filePath: string; action: string }) => void,
+    callback: (data: {
+      filePath: string;
+      action: string;
+      expectedHash?: string;
+    }) => void,
   ) => () => void;
   notifyFileOpened: (filePath: string) => void;
   notifyFileClosed: (filePath: string) => void;
