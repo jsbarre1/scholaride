@@ -9,6 +9,6 @@
 | Mar 31, 2026 | Set up express backend and have it connect with anthropic api and frontend | 3 |
 | Apr 7, 2026 | Continue working on supabase integration, set up file storage syncing | 4 |
 | Apr 8, 2026 | File tracker and restoration for if someone edits externally. Classes and instructors set up| 4 |
-| Apr 9, 2026 | File system upgrades and admin UI | 4 |
+| Apr 9, 2026 | File system upgrades and instructor dashboard UI | 4 |
 | **Total** | | **32** |
 
