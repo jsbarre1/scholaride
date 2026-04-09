@@ -23,6 +23,7 @@ interface TreeData {
     isDirectory: boolean;
     children?: TreeData[];
     isOpen?: boolean;
+    isNew?: boolean;
 }
 
 interface FileExplorerProps {
@@ -58,28 +59,47 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
     }, []);
 
     useEffect(() => {
-        // Listen for file system changes from the main process
         const removeListener = window.electronAPI.onFileSystemChanged(async (eventType, filename) => {
             console.log('File system changed:', eventType, filename);
-            // Ideally we'd be smarter here, but for now, let's just refresh the view.
-            // A full refresh is safest to ensure alignment.
-            if (rootPath) {
+            if (!rootPath) return;
+
+            // If we are currently in middle of an internal creation, ignore FS events for a moment
+            // to prevent race conditions and double-refreshes.
+            if (isCreating) return;
+
+            // filename is usually relative to rootPath
+            // We want to find the parent directory and refresh it.
+            let parentPath = rootPath;
+            if (filename) {
+                const parts = filename.split(/[/\\]/);
+                if (parts.length > 1) {
+                    // It's in a subdirectory
+                    const relDir = parts.slice(0, -1).join('/');
+                    parentPath = `${rootPath}/${relDir}`;
+                }
+            }
+
+            try {
+                const children = await loadDirectory(parentPath);
+                setData(prevData => {
+                    if (parentPath === rootPath) {
+                        return children.map(newChild => {
+                            const existing = prevData.find(p => p.id === newChild.id);
+                            return existing ? { ...newChild, children: existing.children } : newChild;
+                        });
+                    }
+                    return updateNodeChildren(prevData, parentPath, children);
+                });
+            } catch (e) {
+                // If the parent itself is gone, refresh root
                 const rootEntries = await loadDirectory(rootPath);
                 setData(rootEntries);
-
-                // If we had a subfolder expanded, we might want to try to preserve that state
-                // Use a recursive reload approach if we wanted to be perfect, but top-level refresh is a good start.
-                // If lastExpandedPath is set, we could try to reload that too.
-                if (lastExpandedPath && lastExpandedPath !== rootPath) {
-                    const children = await loadDirectory(lastExpandedPath);
-                    setData(prevData => updateNodeChildren(prevData, lastExpandedPath, children));
-                }
             }
         });
         return () => {
             removeListener();
         };
-    }, [rootPath, lastExpandedPath]); // Re-bind if paths change so we have latest closures
+    }, [rootPath, isCreating]);
 
     const loadDirectory = async (dirPath: string): Promise<TreeData[]> => {
         if (!dirPath) return [];
@@ -151,16 +171,85 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
         });
     };
 
+    const injectPhantomNode = (nodes: TreeData[], parentId: string, type: 'file' | 'directory'): TreeData[] => {
+        if (parentId === rootPath) {
+            return [
+                { id: '__NEW__', name: '', isDirectory: type === 'directory', isNew: true },
+                ...nodes
+            ];
+        }
+
+        return nodes.map(node => {
+            if (node.id === parentId) {
+                const children = node.children ? [...node.children] : [];
+                return {
+                    ...node,
+                    children: [
+                        { id: '__NEW__', name: '', isDirectory: type === 'directory', isNew: true },
+                        ...children
+                    ]
+                };
+            }
+            if (node.children) {
+                return { ...node, children: injectPhantomNode(node.children, parentId, type) };
+            }
+            return node;
+        });
+    };
+
+    const removePhantomNode = (nodes: TreeData[]): TreeData[] => {
+        return nodes
+            .filter(node => node.id !== '__NEW__')
+            .map(node => ({
+                ...node,
+                children: node.children ? removePhantomNode(node.children) : undefined
+            }));
+    };
+
+    const [creationError, setCreationError] = useState<string | null>(null);
+    const creationInputRef = useRef<HTMLInputElement>(null);
+
+    const initiateCreation = async (type: 'file' | 'directory', parentPath?: string) => {
+        const path = parentPath || lastExpandedPath || rootPath;
+        setCreationType(type);
+        setLastExpandedPath(path);
+        setIsWorkspaceExpanded(true);
+        setCreationError(null);
+        setNewFileName('');
+        
+        // Ensure folder is loaded and expanded
+        if (path !== rootPath) {
+            const node = findNode(data, path);
+            if (node && node.isDirectory && (!node.children || node.children.length === 0)) {
+                const children = await loadDirectory(path);
+                setData(prev => updateNodeChildren(prev, path, children));
+            }
+            treeRef.current?.open(path);
+        }
+
+        setData(prev => {
+            const cleaned = removePhantomNode(prev);
+            return injectPhantomNode(cleaned, path, type);
+        });
+        setIsCreating(true);
+    };
+
+    const isHandlingCreate = useRef(false);
+
     const handleCreate = async () => {
+        if (isHandlingCreate.current || !isCreating) return;
+        isHandlingCreate.current = true;
+        
         if (!newFileName) {
+            setData(prev => removePhantomNode(prev));
             setIsCreating(false);
+            setCreationError(null);
+            isHandlingCreate.current = false;
             return;
         }
         try {
             let basePath = lastExpandedPath || rootPath;
             
-            // Safety check: ensure the parent still exists
-            // Get parent directory manually since 'path' is not available in renderer
             const parentDir = basePath.split(/[/\\]/).slice(0, -1).join('/') || '/';
             const entries = await window.electronAPI.listDirectory(parentDir);
             const parentExists = entries.some(e => e.path === basePath);
@@ -170,10 +259,22 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                 basePath = rootPath;
             }
 
-            const fullPath = `${basePath}/${newFileName}`;
+            const separator = basePath.endsWith('/') || basePath.endsWith('\\') ? '' : '/';
+            const fullPath = `${basePath}${separator}${newFileName}`;
+
+            // Check if file already exists locally
+            const existingEntries = await window.electronAPI.listDirectory(basePath);
+            const alreadyExists = existingEntries.some(e => e.name.toLowerCase() === newFileName.toLowerCase());
+            
+            if (alreadyExists) {
+                setCreationError(`Already exists`);
+                isHandlingCreate.current = false;
+                setTimeout(() => creationInputRef.current?.focus(), 10);
+                return; // Keep input open
+            }
+            
             if (creationType === 'file') {
                 await window.electronAPI.createFile(fullPath);
-                // Upload the new (empty) file to cloud immediately
                 if (onFileCreated) {
                     onFileCreated(fullPath, '');
                 }
@@ -183,18 +284,29 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
 
             setNewFileName('');
             setIsCreating(false);
+            setCreationError(null);
 
-            // If we created in a subfolder, we should reload that folder
-            if (basePath === rootPath) {
-                const rootEntries = await loadDirectory(rootPath);
-                setData(rootEntries);
-            } else {
-                const children = await loadDirectory(basePath);
-                setData(prevData => updateNodeChildren(prevData, basePath, children));
+            // Targeted refresh: only reload the folder where the name was created
+            const children = await loadDirectory(basePath);
+            setData(prevData => {
+                const cleaned = removePhantomNode(prevData);
+                if (basePath === rootPath) {
+                    return children;
+                }
+                return updateNodeChildren(cleaned, basePath, children);
+            });
+            
+            // Ensure the folder remains open
+            if (basePath !== rootPath) {
+                setTimeout(() => treeRef.current?.open(basePath), 50);
             }
 
         } catch (error) {
             console.error('Failed to create item:', error);
+            setData(prev => removePhantomNode(prev));
+            setIsCreating(false);
+        } finally {
+            isHandlingCreate.current = false;
         }
     };
 
@@ -295,8 +407,13 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
             if (!data) throw new Error('No cloud snapshots found for this file.');
 
             await window.electronAPI.writeFile(pathOnDisk, data.content);
-            alert('File restored successfully from cloud!');
-            onRefreshRequested();
+            
+            // Immediately select the file to refresh the editor content
+            onFileSelect(pathOnDisk);
+            
+            if (onRefreshRequested) {
+                onRefreshRequested();
+            }
         } catch (error: any) {
             console.error('Failed to restore from cloud:', error);
             alert(`Restore failed: ${error.message}`);
@@ -305,6 +422,77 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
 
     const Node = ({ node, style, dragHandle }: NodeRendererProps<TreeData>) => {
         const isSelected = currentPath === node.id;
+
+        if (node.data.isNew) {
+            return (
+                <div style={{ ...style, zIndex: 10 }}>
+                    <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        paddingLeft: `${node.level * 12}px`, 
+                        height: '24px',
+                        paddingRight: '10px',
+                        position: 'relative'
+                    }}>
+                        <span style={{ width: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {node.data.isDirectory ? <VscChevronDown size={14} /> : <span style={{ width: 14 }} />}
+                        </span>
+                        <span style={{ marginRight: '6px', display: 'flex', alignItems: 'center', color: node.data.isDirectory ? '#c5c5c5' : '#888' }}>
+                            {node.data.isDirectory ? <VscFolder size={16} /> : <VscFile size={16} />}
+                        </span>
+                        <input
+                            ref={creationInputRef}
+                            autoFocus
+                            value={newFileName}
+                            onChange={(e) => {
+                                setNewFileName(e.target.value);
+                                if (creationError) setCreationError(null);
+                            }}
+                            onKeyDown={(e) => {
+                                e.stopPropagation();
+                                if (e.key === 'Enter') handleCreate();
+                                if (e.key === 'Escape') {
+                                    setData(prev => removePhantomNode(prev));
+                                    setIsCreating(false);
+                                    setNewFileName('');
+                                    setCreationError(null);
+                                }
+                            }}
+                            onKeyUp={(e) => e.stopPropagation()}
+                            style={{
+                                width: '100%',
+                                background: '#3c3c3c',
+                                border: `1px solid ${creationError ? '#f85149' : '#007acc'}`,
+                                color: 'white',
+                                padding: '0px 4px',
+                                outline: 'none',
+                                fontSize: '12px',
+                                height: '18px'
+                            }}
+                        />
+                        {creationError && (
+                            <div style={{
+                                position: 'absolute',
+                                top: '22px',
+                                left: `${node.level * 12 + 40}px`,
+                                background: '#4e1010',
+                                color: '#ffcdca',
+                                padding: '4px 8px',
+                                fontSize: '11px',
+                                borderRadius: '2px',
+                                border: '1px solid #f85149',
+                                zIndex: 1000,
+                                whiteSpace: 'nowrap',
+                                pointerEvents: 'none',
+                                boxShadow: '0 4px 8px rgba(0,0,0,0.5)'
+                            }}>
+                                {creationError}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
 
         return (
             <div
@@ -323,6 +511,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                 className="tree-node"
                 onClick={() => {
                     if (node.data.isDirectory) {
+                        setLastExpandedPath(node.id);
                         node.toggle();
                     } else {
                         onFileSelect(node.id);
@@ -350,6 +539,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
         );
     };
 
+    const [isWorkspaceExpanded, setIsWorkspaceExpanded] = useState(true);
+
     return (
         <div style={{
             width: '100%',
@@ -371,14 +562,14 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                 <span style={{ fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', color: '#bbbbbb' }}>Explorer</span>
                 <div style={{ display: 'flex', gap: '4px' }}>
                     <button
-                        onClick={() => { setIsCreating(true); setCreationType('file'); }}
+                        onClick={() => initiateCreation('file')}
                         title="New File"
                         style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', padding: '2px', display: 'flex' }}
                     >
                         <VscNewFile size={16} />
                     </button>
                     <button
-                        onClick={() => { setIsCreating(true); setCreationType('directory'); }}
+                        onClick={() => initiateCreation('directory')}
                         title="New Folder"
                         style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', padding: '2px', display: 'flex' }}
                     >
@@ -431,56 +622,48 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
             ) : (
                 <>
                     <div style={{ padding: '0 0 5px 0', flexShrink: 0 }}>
-                        <div style={{
-                            padding: '2px 20px',
-                            background: '#383838',
-                            fontWeight: 'bold',
-                            fontSize: '11px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            cursor: 'default',
-                            color: '#fff'
-                        }}>
-                            <VscChevronDown size={14} style={{ marginRight: '5px' }} />
+                        <div 
+                            onClick={() => {
+                                setIsWorkspaceExpanded(!isWorkspaceExpanded);
+                                setLastExpandedPath(rootPath);
+                            }}
+                            style={{
+                                padding: '2px',
+                                background: '#383838',
+                                fontWeight: 'bold',
+                                fontSize: '11px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                cursor: 'pointer',
+                                color: '#fff',
+                                userSelect: 'none'
+                            }}
+                        >
+                            {isWorkspaceExpanded ? (
+                                <VscChevronDown size={14} style={{ marginRight: '5px' }} />
+                            ) : (
+                                <VscChevronRight size={14} style={{ marginRight: '5px' }} />
+                            )}
                             {getDisplayName()}
                         </div>
                     </div>
 
-                    <div style={{ flex: 1, minHeight: 0 }} onClick={() => setContextMenu(null)}>
-                        {isCreating && (
-                            <div style={{ padding: '3px 20px 3px 30px', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-                                {creationType === 'directory' ?
-                                    <VscFolder size={16} style={{ marginRight: '8px', opacity: 0.8 }} /> :
-                                    <VscFile size={16} style={{ marginRight: '8px', opacity: 0.8 }} />
+                    {isWorkspaceExpanded && (
+                        <div 
+                            style={{ flex: 1, minHeight: 0 }} 
+                            onClick={(e) => {
+                                if (e.target === e.currentTarget) {
+                                    setLastExpandedPath(rootPath);
                                 }
-                                <input
-                                    autoFocus
-                                    value={newFileName}
-                                    onChange={(e) => setNewFileName(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') handleCreate();
-                                        if (e.key === 'Escape') setIsCreating(false);
-                                    }}
-                                    onBlur={handleCreate}
-                                    style={{
-                                        width: '100%',
-                                        background: '#3c3c3c',
-                                        border: '1px solid var(--vscode-statusbar-bg)',
-                                        color: 'white',
-                                        padding: '1px 4px',
-                                        outline: 'none',
-                                        fontSize: '12px'
-                                    }}
-                                    placeholder={`${creationType === 'directory' ? 'Folder Name' : 'File Name'} in ${(lastExpandedPath || rootPath || '').split(/[/\\]/).pop()}`}
-                                />
-                            </div>
-                        )}
-                        <Tree
+                                setContextMenu(null);
+                            }}
+                        >
+                            <Tree
                             data={data || []}
                             openByDefault={false}
                             width={'100%'}
                             height={1000}
-                            indent={24}
+                            indent={10}
                             rowHeight={24}
                             overscanCount={5}
                             onToggle={handleToggle}
@@ -489,7 +672,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                         >
                             {Node}
                         </Tree>
-                    </div>
+                        </div>
+                    )}
 
                     {/* Context Menu */}
                     {contextMenu && (
@@ -516,6 +700,34 @@ const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, currentPath, 
                             >
                                 <span style={{ marginRight: '8px' }}>🗑️</span> Delete
                             </div>
+                            {data.find(d => d.id === contextMenu.path)?.isDirectory && (
+                                <>
+                                    <div
+                                        style={{ padding: '4px 12px', fontSize: '13px', cursor: 'pointer', color: '#cccccc', display: 'flex', alignItems: 'center' }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            initiateCreation('file', contextMenu.path);
+                                            setContextMenu(null);
+                                        }}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#094771'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                    >
+                                        <VscNewFile size={14} style={{ marginRight: '8px' }} /> New File
+                                    </div>
+                                    <div
+                                        style={{ padding: '4px 12px', fontSize: '13px', cursor: 'pointer', color: '#cccccc', display: 'flex', alignItems: 'center' }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            initiateCreation('directory', contextMenu.path);
+                                            setContextMenu(null);
+                                        }}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#094771'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                    >
+                                        <VscNewFolder size={14} style={{ marginRight: '8px' }} /> New Folder
+                                    </div>
+                                </>
+                            )}
                             {!data.find(d => d.id === contextMenu.path)?.isDirectory && (
                                 <div
                                     style={{ padding: '4px 12px', fontSize: '13px', cursor: 'pointer', color: '#4ec9f0', display: 'flex', alignItems: 'center' }}

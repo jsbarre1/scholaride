@@ -290,7 +290,11 @@ const App: React.FC = () => {
 
   const handleRunFile = () => {
     if (selectedFile && language === "python") {
-      window.electronAPI.sendTerminalInput(`python3 "${selectedFile}"\n`);
+      let relPath = selectedFile.replace(rootPath, "");
+      // Remove leading slash if present
+      relPath = relPath.replace(/^[/\\]+/, "");
+      
+      window.electronAPI.sendTerminalInput(`python3 "${relPath}"\n`);
       setShowTerminal(true);
     }
   };

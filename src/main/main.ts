@@ -62,9 +62,7 @@ const initializeWorkspace = async (): Promise<void> => {
 
     // Create a welcome file
     const welcomeFile = path.join(workspacePath, "welcome.md");
-    await fs.writeFile(
-      welcomeFile,
-      `# Welcome to ScholarIDE!
+    const welcomeContent = `# Welcome to ScholarIDE!
 
 This is your workspace directory. All your files will be stored here.
 
@@ -75,9 +73,17 @@ This is your workspace directory. All your files will be stored here.
 3. Run Python files with the Run button
 
 Happy coding!
-`,
-      "utf-8",
-    );
+`;
+    await fs.writeFile(welcomeFile, welcomeContent, "utf-8");
+    await saveIntegrityHash(welcomeFile, welcomeContent);
+    
+    // Add to initial snapshots so it doesn't trigger "unknown file" warnings
+    const stats = await fs.stat(welcomeFile);
+    fileSnapshots.set(welcomeFile, {
+      content: welcomeContent,
+      mtime: stats.mtimeMs,
+      hash: hashContent(welcomeContent),
+    });
   }
 };
 
@@ -962,6 +968,14 @@ ipcMain.handle(
         const welcomeContent = `# Welcome to ${className}\n\nThis is your focused workspace for this class.\n`;
         await fs.writeFile(welcomeFile, welcomeContent, "utf-8");
         await saveIntegrityHash(welcomeFile, welcomeContent);
+
+        // Add to tracking
+        const stats = await fs.stat(welcomeFile);
+        fileSnapshots.set(welcomeFile, {
+          content: welcomeContent,
+          mtime: stats.mtimeMs,
+          hash: hashContent(welcomeContent),
+        });
       }
     }
 

@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     VscFiles,
     VscSearch,
-    VscSourceControl,
-    VscExtensions,
     VscSettingsGear,
     VscSignOut,
     VscAccount,
@@ -47,12 +45,6 @@ const ActivityBar: React.FC = () => {
             </div>
             <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.5 }}>
                 <VscSearch size={24} />
-            </div>
-            <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.5 }}>
-                <VscSourceControl size={24} />
-            </div>
-            <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.5 }}>
-                <VscExtensions size={24} />
             </div>
 
             {/* Settings / Account — bottom of activity bar */}
