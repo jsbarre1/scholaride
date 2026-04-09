@@ -1,6 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Courses from './pages/Courses';
+import CourseDetails from './pages/CourseDetails';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
@@ -29,7 +31,8 @@ function App() {
           }
         >
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/courses" element={<PlaceholderPage title="Courses" />} />
+          <Route path="/courses" element={<Courses />} />
+          <Route path="/courses/:courseId" element={<CourseDetails />} />
           <Route path="/students" element={<PlaceholderPage title="Students" />} />
           <Route path="/assignments" element={<PlaceholderPage title="Assignments" />} />
           <Route path="/schedule" element={<PlaceholderPage title="Schedule" />} />
