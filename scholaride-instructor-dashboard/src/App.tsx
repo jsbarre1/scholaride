@@ -3,6 +3,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Courses from './pages/Courses';
 import CourseDetails from './pages/CourseDetails';
+import Students from './pages/Students';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
@@ -33,10 +34,8 @@ function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/courses" element={<Courses />} />
           <Route path="/courses/:courseId" element={<CourseDetails />} />
-          <Route path="/students" element={<PlaceholderPage title="Students" />} />
+          <Route path="/students" element={<Students />} />
           <Route path="/assignments" element={<PlaceholderPage title="Assignments" />} />
-          <Route path="/schedule" element={<PlaceholderPage title="Schedule" />} />
-          <Route path="/messages" element={<PlaceholderPage title="Messages" />} />
         </Route>
 
         {/* Default Redirects */}

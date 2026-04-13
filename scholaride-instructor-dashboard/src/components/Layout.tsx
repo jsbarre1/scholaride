@@ -42,8 +42,6 @@ const Layout: React.FC = () => {
     { id: 'courses', label: 'Courses', icon: <BookOpen size={20} />, path: '/courses' },
     { id: 'students', label: 'Students', icon: <Users size={20} />, path: '/students' },
     { id: 'assignments', label: 'Assignments', icon: <ClipboardList size={20} />, path: '/assignments' },
-    { id: 'schedule', label: 'Schedule', icon: <Calendar size={20} />, path: '/schedule' },
-    { id: 'messages', label: 'Messages', icon: <MessageSquare size={20} />, path: '/messages' },
   ];
 
   if (loading) {
