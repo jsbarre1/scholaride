@@ -10,8 +10,6 @@ import {
   Search, 
   Bell, 
   LogOut,
-  Calendar,
-  MessageSquare,
   Loader2
 } from 'lucide-react';
 

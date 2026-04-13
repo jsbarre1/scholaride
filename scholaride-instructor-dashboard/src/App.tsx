@@ -4,17 +4,10 @@ import Dashboard from './pages/Dashboard';
 import Courses from './pages/Courses';
 import CourseDetails from './pages/CourseDetails';
 import Students from './pages/Students';
+import Assignments from './pages/Assignments';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
-
-// Placeholder components for other pages
-const PlaceholderPage = ({ title }: { title: string }) => (
-  <div className="page-header">
-    <h1>{title}</h1>
-    <p>This page is currently under development.</p>
-  </div>
-);
 
 function App() {
   return (
@@ -35,7 +28,7 @@ function App() {
           <Route path="/courses" element={<Courses />} />
           <Route path="/courses/:courseId" element={<CourseDetails />} />
           <Route path="/students" element={<Students />} />
-          <Route path="/assignments" element={<PlaceholderPage title="Assignments" />} />
+          <Route path="/assignments" element={<Assignments />} />
         </Route>
 
         {/* Default Redirects */}

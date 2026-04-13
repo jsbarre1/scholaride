@@ -152,8 +152,12 @@ const CourseDetails: React.FC = () => {
             </p>
           </div>
           <div style={{ display: 'flex', gap: '1rem' }}>
-            <button className="nav-item" style={{ background: 'transparent', border: '1px solid var(--border-color)' }}>
-              Edit Course
+            <button 
+              onClick={() => navigate(`/assignments?courseId=${courseInfo.id}`)}
+              className="nav-item" 
+              style={{ background: 'transparent', border: '1px solid var(--border-color)' }}
+            >
+              Manage Assignments
             </button>
             <button className="nav-item" style={{ background: 'var(--primary)', color: 'white' }}>
               Export Roster
