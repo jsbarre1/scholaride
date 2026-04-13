@@ -46,6 +46,13 @@ export interface ElectronAPI {
   notifyFileClosed: (filePath: string) => void;
   aiChat: (messages: any[]) => Promise<any>;
   onOAuthCallback: (callback: (event: any, url: string) => void) => () => void;
+  pathJoin: (...args: string[]) => string;
+  pathDirname: (p: string) => string;
+  clipboard: {
+    writeInternal: (text: string) => void;
+    readInternal: () => Promise<{ text: string; isInternal: boolean }>;
+    isInternalSync: () => boolean;
+  };
 }
 declare global {
   interface Window {

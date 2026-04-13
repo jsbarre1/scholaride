@@ -131,6 +131,44 @@ const EditorArea: React.FC<EditorAreaProps> = ({
                         language={language}
                         value={fileContent}
                         onChange={onContentChange}
+                        onMount={(editor, monaco) => {
+                            // Intercept copy inside Monaco (keyboard)
+                            editor.onKeyDown((e) => {
+                                if ((e.ctrlKey || e.metaKey) && e.keyCode === monaco.KeyCode.KeyC) {
+                                    const selection = editor.getSelection();
+                                    if (selection && !selection.isEmpty()) {
+                                        const text = editor.getModel()?.getValueInRange(selection);
+                                        if (text) {
+                                            console.log("[Monaco] Keyboard Copy:", text.substring(0, 20) + "...");
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            window.electronAPI.clipboard.writeInternal(text);
+                                        }
+                                    }
+                                }
+                            });
+
+                            const container = editor.getContainerDomNode();
+                            container.addEventListener('copy', (e) => {
+                                const selection = editor.getSelection();
+                                if (selection && !selection.isEmpty()) {
+                                    const text = editor.getModel()?.getValueInRange(selection);
+                                    if (text) {
+                                        console.log("[Monaco] Context Menu Copy:", text.substring(0, 20) + "...");
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        window.electronAPI.clipboard.writeInternal(text);
+                                    }
+                                }
+                            }, true);
+
+                            // Monaco handles paste internally, but we've added a global capture listener in App.tsx.
+                            // However, Monaco sometimes bypasses global listeners.
+                            // To be safe, we can also add a paste listener here or use an action.
+                            editor.onDidPaste(() => {
+                                // This is called AFTER paste. We might want to block it BEFORE.
+                            });
+                        }}
                         theme="vs-dark"
                         options={{
                             automaticLayout: true,

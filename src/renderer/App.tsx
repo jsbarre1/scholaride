@@ -65,6 +65,53 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Workspace-only Copy/Paste Enforcer
+  useEffect(() => {
+    const handleCopy = (e: ClipboardEvent) => {
+      const selection = window.getSelection()?.toString();
+      console.log("[App] Copy event. Selection length:", selection?.length || 0);
+      if (selection) {
+        e.preventDefault();
+        window.electronAPI.clipboard.writeInternal(selection);
+      }
+    };
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const isInternal = window.electronAPI.clipboard.isInternalSync();
+      console.log("[App] Paste event. Internal:", isInternal);
+      
+      if (!isInternal) {
+        console.warn("[App] Blocking external paste event.");
+        e.preventDefault();
+        e.stopPropagation();
+        window.alert("🚫 Paste Blocked\n\nYou can only paste content that was copied from within this ScholarIDE workspace.");
+      }
+    };
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Check for Cmd+V (Mac) or Ctrl+V (Windows/Linux)
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'v' || e.key === 'V')) {
+        const isInternal = window.electronAPI.clipboard.isInternalSync();
+        console.log("[App] Global KeyDown (Paste). Internal:", isInternal);
+        if (!isInternal) {
+          e.preventDefault();
+          e.stopPropagation();
+          console.warn("[App] Blocking external paste (Key).");
+          window.alert("🚫 Paste Blocked\n\nYou can only paste content that was copied from within this ScholarIDE workspace.");
+        }
+      }
+    };
+
+    window.addEventListener('copy', handleCopy);
+    window.addEventListener('paste', handlePaste, true); // Use capture phase to intercept before Monaco
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => {
+      window.removeEventListener('copy', handleCopy);
+      window.removeEventListener('paste', handlePaste, true);
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+    };
+  }, []);
+
   // When user logs in: tell main process which user folder to use.
   useEffect(() => {
     if (session?.user) {

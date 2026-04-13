@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, clipboard } from "electron";
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
@@ -1267,4 +1267,35 @@ app.on("second-instance", (_event, commandLine) => {
       mainWindow.focus();
     } catch (e) {}
   }
+});
+// --- Clipboard Handlers for Workspace-Only Copy/Paste ---
+let lastInternalHash = "";
+
+const getHash = (text: string) => {
+  return require("crypto").createHash("sha256").update(text).digest("hex");
+};
+
+ipcMain.on("clipboard-write-internal", (event, text) => {
+  console.log("[Main] Writing internal clipboard (Hash approach).");
+  lastInternalHash = getHash(text);
+  clipboard.writeText(text);
+});
+
+ipcMain.handle("clipboard-read-internal", (event) => {
+  const text = clipboard.readText();
+  const currentHash = getHash(text);
+  const isInternal = currentHash === lastInternalHash && text !== "";
+  console.log("[Main] Async read. Internal:", isInternal);
+  return {
+    text,
+    isInternal,
+  };
+});
+
+ipcMain.on("clipboard-is-internal", (event) => {
+  const text = clipboard.readText();
+  const currentHash = getHash(text);
+  const isInternal = currentHash === lastInternalHash && text !== "";
+  console.log("[Main] Sync check. Internal:", isInternal, "Hash matches:", currentHash === lastInternalHash);
+  event.returnValue = isInternal;
 });

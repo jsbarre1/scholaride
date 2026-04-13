@@ -57,6 +57,20 @@ const TerminalPanel: React.FC = () => {
                 });
                 listenersRef.current.push(() => disposable.dispose());
 
+                // Intercept terminal copy
+                const handleTerminalCopy = (e: ClipboardEvent) => {
+                    const selection = term.getSelection();
+                    if (selection) {
+                        console.log("[Terminal] Copying:", selection.substring(0, 20) + "...");
+                        e.preventDefault();
+                        window.electronAPI.clipboard.writeInternal(selection);
+                    }
+                };
+                
+                // The terminal element might need focus to trigger this
+                term.element?.addEventListener('copy', handleTerminalCopy);
+                listenersRef.current.push(() => term.element?.removeEventListener('copy', handleTerminalCopy));
+
                 // Initial fit
                 requestAnimationFrame(() => {
                     try {

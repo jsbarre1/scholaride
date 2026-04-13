@@ -63,4 +63,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   pathJoin: (...args: string[]) => args.join("/").replace(/\/+/g, "/"), // Simple cross-platform join for renderer
   pathDirname: (p: string) => p.split(/[/\\]/).slice(0, -1).join("/") || ".",
+  clipboard: {
+    writeInternal: (text: string) => ipcRenderer.send("clipboard-write-internal", text),
+    readInternal: () => ipcRenderer.invoke("clipboard-read-internal"),
+    isInternalSync: () => ipcRenderer.sendSync("clipboard-is-internal"),
+  },
 });
