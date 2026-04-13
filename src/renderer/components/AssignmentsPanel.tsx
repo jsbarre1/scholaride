@@ -3,14 +3,7 @@ import { supabase } from "../lib/supabase";
 import { useClass } from "../context/ClassContext";
 import { useAuth } from "../context/AuthContext";
 import { VscCloudDownload, VscLoading, VscCheck } from "react-icons/vsc";
-
-interface Assignment {
-  id: string;
-  title: string;
-  description: string;
-  due_date: string;
-  starter_files: Array<{ path: string; content: string }>;
-}
+import { Assignment } from "../types";
 
 interface AssignmentsPanelProps {
   rootPath: string;
@@ -28,7 +21,9 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [startedAssignmentDirs, setStartedAssignmentDirs] = useState<Set<string>>(new Set());
+  const [submittedIds, setSubmittedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (currentClass && user) {
@@ -83,6 +78,18 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
       }
 
       setStartedAssignmentDirs(startedDirs);
+
+      // 4. Fetch existing submissions for this user/class
+      const { data: submissionsData, error: submissionsError } = await supabase
+        .from("submissions")
+        .select("assignment_id")
+        .eq("student_id", user.id);
+
+      if (submissionsError) throw submissionsError;
+      
+      const subIds = new Set<string>();
+      submissionsData?.forEach(s => subIds.add(s.assignment_id));
+      setSubmittedIds(subIds);
     } catch (e) {
       console.error("Error fetching assignments:", e);
     } finally {
@@ -135,6 +142,48 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
       alert("Failed to start assignment.");
     } finally {
       setDownloadingId(null);
+    }
+  };
+
+  const submitAssignment = async (assignment: Assignment) => {
+    if (!rootPath || !user) return;
+
+    const confirmSubmit = window.confirm(`Are you sure you want to submit "${assignment.title}"? This will upload your current code for grading.`);
+    if (!confirmSubmit) return;
+
+    setSubmittingId(assignment.id);
+    try {
+      const dirName = assignment.title.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+      const assignmentPath = `${rootPath}/${dirName}`;
+
+      // 1. Gather all files in the assignment directory
+      const files = await window.electronAPI.listAllFiles(assignmentPath);
+
+      if (files.length === 0) {
+        alert("No files found to submit. Make sure you have created some files in the assignment folder.");
+        return;
+      }
+
+      // 2. Submit to Supabase
+      const { error } = await supabase
+        .from("submissions")
+        .upsert({
+          assignment_id: assignment.id,
+          student_id: user.id,
+          content: files,
+          submitted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) throw error;
+
+      setSubmittedIds(prev => new Set(prev).add(assignment.id));
+      alert(`Assignment "${assignment.title}" submitted successfully!`);
+    } catch (e) {
+      console.error("Error submitting assignment:", e);
+      alert("Failed to submit assignment. Please try again.");
+    } finally {
+      setSubmittingId(null);
     }
   };
 
@@ -218,6 +267,50 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
                       </>
                     )}
                   </button>
+
+                  {isStarted && (
+                    <button
+                      onClick={() => !submittedIds.has(a.id) && submitAssignment(a)}
+                      disabled={submittingId === a.id || submittedIds.has(a.id)}
+                      style={{
+                        width: "100%",
+                        padding: "8px",
+                        marginTop: "8px",
+                        background: submittingId === a.id ? "#333" : submittedIds.has(a.id) ? "#1e1e1e" : "#28a745",
+                        color: submittedIds.has(a.id) ? "#28a745" : "#fff",
+                        border: submittedIds.has(a.id) ? "1px solid #28a745" : "none",
+                        borderRadius: "3px",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        cursor: submittingId === a.id || submittedIds.has(a.id) ? "default" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "8px",
+                        transition: "all 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (submittingId !== a.id && !submittedIds.has(a.id)) e.currentTarget.style.background = "#218838";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (submittingId !== a.id && !submittedIds.has(a.id)) e.currentTarget.style.background = "#28a745";
+                      }}
+                    >
+                      {submittingId === a.id ? (
+                        <>
+                          <VscLoading className="animate-spin" /> Submitting...
+                        </>
+                      ) : submittedIds.has(a.id) ? (
+                        <>
+                          <VscCheck size={14} /> Submitted
+                        </>
+                      ) : (
+                        <>
+                          <VscCloudDownload size={14} style={{ transform: "rotate(180deg)" }} /> Submit Assignment
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               );
             })}

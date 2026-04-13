@@ -77,15 +77,30 @@ The main process runs a **File Watcher + Snapshot Guard** that:
          │ belongs to
          ▼
 ┌─────────────────────────────────┐
-│   assignments (Supabase DB)     │   ← PLANNED
+│   assignments (Supabase DB)     │
 │─────────────────────────────────│
-│ id                              │
-│ instructor_id → auth.users      │
-│ title                           │
-│ description                     │
-│ due_at                          │
-│ ai_tutor_allowed (bool)         │
-│                                 │
+│ id (uuid)                       │
+│ class_id → classes.id           │
+│ title (text)                    │
+│ description (text)              │
+│ due_date (timestamptz)          │
+│ starter_files (jsonb)           │
+│ created_at (timestamptz)        │
+└─────────────────────────────────┘
+         │
+         │ referenced by
+         ▼
+┌─────────────────────────────────┐
+│   submissions (Supabase DB)     │
+│─────────────────────────────────│
+│ id (uuid)                       │
+│ assignment_id → assignments.id  │
+│ student_id → profiles.id        │
+│ content (jsonb)                 │
+│ score (numeric)                 │
+│ feedback (text)                 │
+│ submitted_at (timestamptz)      │
+│ updated_at (timestamptz)        │
 └─────────────────────────────────┘
          │
          │ referenced by

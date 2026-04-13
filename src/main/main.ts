@@ -590,6 +590,43 @@ ipcMain.handle("create-file", async (event, filePath) => {
   }
 });
 
+ipcMain.handle("list-all-files", async (event, dirPath) => {
+  const files: Array<{ path: string; content: string }> = [];
+  try {
+    const absolutePath = path.isAbsolute(dirPath)
+      ? dirPath
+      : path.join(getWorkspacePath(), dirPath);
+    const validatedPath = validatePath(absolutePath);
+
+    const scan = async (currentPath: string) => {
+      const entries = await fs.readdir(currentPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(currentPath, entry.name);
+        
+        // Skip hidden files and ignored directories
+        if (entry.name.startsWith('.') || entry.name.endsWith('.scholaride.hash')) continue;
+        
+        const ignored = ["node_modules", ".git", ".DS_Store", "dist", "out", "build"];
+        if (ignored.includes(entry.name)) continue;
+
+        if (entry.isDirectory()) {
+          await scan(fullPath);
+        } else if (entry.isFile()) {
+          const content = await fs.readFile(fullPath, "utf-8");
+          const relativePath = path.relative(validatedPath, fullPath);
+          files.push({ path: relativePath, content });
+        }
+      }
+    };
+
+    await scan(validatedPath);
+    return files;
+  } catch (error) {
+    console.error("Error listing all files:", error);
+    return [];
+  }
+});
+
 ipcMain.handle("create-directory", async (event, dirPath) => {
   let validatedPath: string;
   try {

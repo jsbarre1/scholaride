@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("electronAPI", {
   listDirectory: (path: string) => ipcRenderer.invoke("list-directory", path),
   readFile: (path: string) => ipcRenderer.invoke("read-file", path),
+  listAllFiles: (path: string) => ipcRenderer.invoke("list-all-files", path),
   writeFile: (path: string, content: string) =>
     ipcRenderer.invoke("write-file", path, content),
   createFile: (path: string) => ipcRenderer.invoke("create-file", path),

@@ -13,6 +13,7 @@ export enum UserRole {
 export interface ElectronAPI {
   listDirectory: (path: string) => Promise<FileEntry[]>;
   readFile: (path: string) => Promise<string>;
+  listAllFiles: (path: string) => Promise<Array<{ path: string; content: string }>>;
   writeFile: (path: string, content: string) => Promise<boolean>;
   createFile: (path: string) => Promise<boolean>;
   getAppPath: () => Promise<string>;
@@ -54,6 +55,27 @@ export interface ElectronAPI {
     isInternalSync: () => boolean;
   };
 }
+export interface Assignment {
+  id: string;
+  class_id: string;
+  title: string;
+  description: string | null;
+  due_date: string | null;
+  starter_files: Array<{ path: string; content: string }>;
+  created_at: string;
+}
+
+export interface Submission {
+  id: string;
+  assignment_id: string;
+  student_id: string;
+  content: Array<{ path: string; content: string }>;
+  score: number | null;
+  feedback: string | null;
+  submitted_at: string;
+  updated_at: string;
+}
+
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
