@@ -5,10 +5,16 @@ import {
     VscSettingsGear,
     VscSignOut,
     VscAccount,
+    VscNotebook,
 } from 'react-icons/vsc';
 import { useAuth } from '../context/AuthContext';
 
-const ActivityBar: React.FC = () => {
+interface ActivityBarProps {
+    activeView: 'files' | 'assignments' | 'search';
+    onViewChange: (view: 'files' | 'assignments' | 'search') => void;
+}
+
+const ActivityBar: React.FC<ActivityBarProps> = ({ activeView, onViewChange }) => {
     const { user, signOut } = useAuth();
     const [showMenu, setShowMenu] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -40,11 +46,50 @@ const ActivityBar: React.FC = () => {
             flexShrink: 0,
             position: 'relative',
         }}>
-            <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderLeft: '2px solid white', cursor: 'pointer' }}>
+            <div 
+                onClick={() => onViewChange('files')}
+                style={{ 
+                    width: '48px', 
+                    height: '48px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    borderLeft: activeView === 'files' ? '2px solid white' : '2px solid transparent', 
+                    cursor: 'pointer',
+                    opacity: activeView === 'files' ? 1 : 0.4
+                }}
+            >
                 <VscFiles size={24} color="#fff" />
             </div>
-            <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.5 }}>
-                <VscSearch size={24} />
+            <div 
+                onClick={() => onViewChange('assignments')}
+                style={{ 
+                    width: '48px', 
+                    height: '48px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    borderLeft: activeView === 'assignments' ? '2px solid white' : '2px solid transparent',
+                    cursor: 'pointer',
+                    opacity: activeView === 'assignments' ? 1 : 0.4
+                }}
+            >
+                <VscNotebook size={24} color="#fff" />
+            </div>
+            <div 
+                onClick={() => onViewChange('search')}
+                style={{ 
+                    width: '48px', 
+                    height: '48px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    borderLeft: activeView === 'search' ? '2px solid white' : '2px solid transparent',
+                    cursor: 'pointer', 
+                    opacity: activeView === 'search' ? 1 : 0.4 
+                }}
+            >
+                <VscSearch size={24} color="#fff" />
             </div>
 
             {/* Settings / Account — bottom of activity bar */}

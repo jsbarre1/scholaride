@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("terminal-data", listener);
   },
   sendTerminalInput: (data: string) => ipcRenderer.send("terminal-input", data),
+  runPythonFile: (relPath: string) => ipcRenderer.send("terminal-run-file", relPath),
   resizeTerminal: (cols: number, rows: number) =>
     ipcRenderer.send("terminal-resize", { cols, rows }),
   setTerminalCwd: (cwd: string) => ipcRenderer.send("terminal-set-cwd", cwd),
@@ -60,4 +61,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("oauth-callback", listener);
     return () => ipcRenderer.removeListener("oauth-callback", listener);
   },
+  pathJoin: (...args: string[]) => args.join("/").replace(/\/+/g, "/"), // Simple cross-platform join for renderer
+  pathDirname: (p: string) => p.split(/[/\\]/).slice(0, -1).join("/") || ".",
 });

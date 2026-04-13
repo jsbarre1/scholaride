@@ -9,11 +9,7 @@ import { useClass } from '../context/ClassContext';
 const relativePath = (workspacePath: string, filePath: string): string =>
     filePath.replace(workspacePath, '').replace(/^[/\\]+/, '');
 
-/**
- * Lightweight client-side hash for skip-dedup only.
- * NOT used for any security purpose — the DB generates the authoritative hash.
- * Using Web Crypto's SHA-256 via the subtle API (available in Electron renderer).
- */
+/** Lightweight client-side hash for skip-dedup only. */
 const quickHash = async (content: string): Promise<string> => {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -21,54 +17,32 @@ const quickHash = async (content: string): Promise<string> => {
 
 /** Recursively collect all local file paths under a directory via IPC. */
 const collectLocalFiles = async (dirPath: string): Promise<string[]> => {
-    const entries: { path: string; isDirectory: boolean }[] =
-        await (window as any).electronAPI.listDirectory(dirPath);
+    try {
+        const entries: { path: string; name: string; isDirectory: boolean }[] =
+            await (window as any).electronAPI.listDirectory(dirPath);
 
-    const results: string[] = [];
-    for (const entry of entries) {
-        if (entry.isDirectory) {
-            results.push(...await collectLocalFiles(entry.path));
-        } else {
-            results.push(entry.path);
+        const results: string[] = [];
+        for (const entry of entries) {
+            if (entry.isDirectory) {
+                results.push(...await collectLocalFiles(entry.path));
+            } else if (!entry.name.endsWith('.scholaride.hash') && !entry.name.endsWith('.scholaride.dir')) {
+                results.push(entry.path);
+            }
         }
+        return results;
+    } catch (e) {
+        return [];
     }
-    return results;
 };
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-/**
- * useFileSnapshots — anti-cheat audit trail for ScholarIDE.
- *
- * On every Cmd+S, saves the full file content to the Supabase `file_snapshots`
- * table. The authoritative SHA-256 hash is computed SERVER-SIDE by Postgres
- * as a generated column — the client cannot spoof it.
- *
- * A local hash cache is used purely to skip inserts when content hasn't
- * changed since the last save (performance only, not security).
- *
- * Instructors query file_snapshots (via service-role key from a backend) to:
- *   - Review the full edit history per student
- *   - Detect plagiarism via the duplicate_snapshots view (identical hashes)
- *   - Flag suspiciously perfect code with no AI interaction history
- */
 export const useFileSnapshots = (workspacePath: string) => {
     const { user } = useAuth();
     const { currentClass } = useClass();
-
-    /**
-     * Local dedup cache: relative path → quick hash of last successfully
-     * inserted content. Cleared on reload/login. Security-irrelevant.
-     */
     const localHashCache = useRef<Map<string, string>>(new Map());
+    const isSyncing = useRef(false);
 
-    // ── saveSnapshot ──────────────────────────────────────────────────────────
-
-    /**
-     * Called after every successful writeFile (Cmd+S).
-     * Inserts a new snapshot row if content differs from the last save.
-     * The DB column `content_hash` is GENERATED from `content` server-side.
-     */
     const saveSnapshot = useCallback(async (
         filePath: string,
         content: string,
@@ -76,15 +50,9 @@ export const useFileSnapshots = (workspacePath: string) => {
         if (!user || !workspacePath || !currentClass) return;
 
         const rel = relativePath(workspacePath, filePath);
-
-        // Client-side dedup: compute a local hash and skip if unchanged
         const localHash = await quickHash(content);
-        if (localHashCache.current.get(rel) === localHash) {
-            console.log('[FileSnapshots] No change — skipping:', rel);
-            return;
-        }
+        if (localHashCache.current.get(rel) === localHash) return;
 
-        // Send only {user_id, class_id, file_path, content} — DB computes content_hash
         const { error } = await supabase
             .from('file_snapshots')
             .insert({
@@ -94,78 +62,125 @@ export const useFileSnapshots = (workspacePath: string) => {
                 content,
             });
 
-        if (error) {
-            console.error(
-                '[FileSnapshots] ❌ Failed to save snapshot:',
-                '\n  File:', rel,
-                '\n  Error:', error.message,
-                '\n  Code:', error.code,
-            );
-        } else {
+        if (!error) {
             localHashCache.current.set(rel, localHash);
-            console.log('[FileSnapshots] ✅ Snapshot saved:', rel);
         }
     }, [user, workspacePath, currentClass]);
 
-    // ── syncAllFiles ──────────────────────────────────────────────────────────
-
-    /**
-     * Walk the workspace and snapshot every file that has changed.
-     * Called from the manual Sync button in the TitleBar.
-     */
     const syncAllFiles = useCallback(async (): Promise<void> => {
         if (!user || !workspacePath || !currentClass) return;
+        if (isSyncing.current) return;
 
-        console.log('[FileSnapshots] Starting full workspace sync…');
+        isSyncing.current = true;
+        console.log('[Sync] Starting robust integrity sync…');
 
-        let filePaths: string[] = [];
         try {
-            filePaths = await collectLocalFiles(workspacePath);
-        } catch (e) {
-            console.error('[FileSnapshots] Failed to collect local files:', e);
-            return;
-        }
+            // 1. Fetch Cloud State
+            const { data: cloudData, error: cloudError } = await supabase
+                .from('file_snapshots')
+                .select('file_path, content, saved_at')
+                .eq('user_id', user.id)
+                .eq('class_id', currentClass.id)
+                .order('saved_at', { ascending: false });
 
-        if (filePaths.length === 0) {
-            console.log('[FileSnapshots] Workspace appears empty.');
-            return;
-        }
+            if (cloudError) throw cloudError;
 
-        let saved = 0;
-        let skipped = 0;
+            const latestCloudMap = new Map<string, string>();
+            cloudData?.forEach(s => {
+                if (!latestCloudMap.has(s.file_path)) latestCloudMap.set(s.file_path, s.content);
+            });
 
-        for (const fp of filePaths) {
-            try {
-                const content: string = await (window as any).electronAPI.readFile(fp);
-                const rel = relativePath(workspacePath, fp);
-                const localHash = await quickHash(content);
+            // 2. CLEANUP: Delete unauthorized local folders
+            const topLevelEntries = await (window as any).electronAPI.listDirectory(workspacePath);
+            let cleanedCount = 0;
+            for (const entry of topLevelEntries) {
+                if (entry.isDirectory) {
+                    const dirName = entry.name.toLowerCase();
+                    const ignored = ["node_modules", ".git", ".vscode", ".idea", ".scholaride"];
+                    if (ignored.includes(dirName)) continue;
 
-                if (localHashCache.current.get(rel) === localHash) {
-                    skipped++;
-                    continue;
+                    const hasCloudPresence = Array.from(latestCloudMap.keys()).some(
+                        rel => rel.toLowerCase().startsWith(dirName + '/') || rel.toLowerCase() === dirName
+                    );
+
+                    if (!hasCloudPresence) {
+                        await (window as any).electronAPI.deletePath(entry.path);
+                        cleanedCount++;
+                    }
                 }
-
-                const { error } = await supabase
-                    .from('file_snapshots')
-                    .insert({ 
-                        user_id: user.id, 
-                        class_id: currentClass.id,
-                        file_path: rel, 
-                        content 
-                    });
-
-                if (error) {
-                    console.error('[FileSnapshots] ❌ Failed:', rel, error.message);
-                } else {
-                    localHashCache.current.set(rel, localHash);
-                    saved++;
-                }
-            } catch (e) {
-                console.error('[FileSnapshots] Error reading file:', fp, e);
             }
-        }
 
-        console.log(`[FileSnapshots] Sync complete — ${saved} saved, ${skipped} unchanged.`);
+            // 3. RESTORE MISSING: Ensure all cloud files exist locally
+            let restoredCount = 0;
+            for (const [relPath, content] of latestCloudMap.entries()) {
+                const fullPath = (window as any).electronAPI.pathJoin(workspacePath, relPath);
+                try {
+                    await (window as any).electronAPI.readFile(fullPath);
+                    // Exists, will be checked for tampering in step 4
+                } catch (e) {
+                    // Missing! Restore it.
+                    const dirPath = (window as any).electronAPI.pathDirname(fullPath);
+                    await (window as any).electronAPI.createDirectory(dirPath);
+                    await (window as any).electronAPI.writeFile(fullPath, content);
+                    restoredCount++;
+                }
+            }
+
+            // 4. AUDIT & UPLOAD: Check remaining local files
+            const localFilePaths = await collectLocalFiles(workspacePath);
+            let uploadedCount = 0;
+            for (const fp of localFilePaths) {
+                const rel = relativePath(workspacePath, fp);
+                const cloudContent = latestCloudMap.get(rel);
+                
+                try {
+                    const localContent: string | null = await (window as any).electronAPI.readFile(fp);
+                    if (localContent === null) continue; // File vanished
+                    
+                    const localHash = await quickHash(localContent);
+
+                    // Check integrity sidecar
+                    let storedHash: string | null = null;
+                    try {
+                        storedHash = await (window as any).electronAPI.readFile(fp + '.scholaride.hash');
+                    } catch (e) {}
+
+                    const isTampered = storedHash !== localHash;
+
+                    if (isTampered) {
+                        // REVERT: If different from cloud, overwrite it
+                        if (cloudContent !== undefined && localContent !== cloudContent) {
+                            await (window as any).electronAPI.writeFile(fp, cloudContent);
+                            restoredCount++;
+                        }
+                    } else {
+                        // LEGIT: If newer than cloud, upload it
+                        if (cloudContent !== localContent) {
+                            const { error } = await supabase.from('file_snapshots').insert({
+                                user_id: user.id,
+                                class_id: currentClass.id,
+                                file_path: rel,
+                                content: localContent
+                            });
+                            if (!error) {
+                                localHashCache.current.set(rel, localHash);
+                                uploadedCount++;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // File might have been deleted mid-sync, skip
+                }
+            }
+
+            if (restoredCount > 0 || cleanedCount > 0 || uploadedCount > 0) {
+                window.alert(`✅ Sync Complete\n\n- ${restoredCount} items restored\n- ${cleanedCount} unauthorized folders cleaned\n- ${uploadedCount} backups created`);
+            }
+        } catch (e: any) {
+            console.error('[Sync] Error:', e);
+        } finally {
+            isSyncing.current = false;
+        }
     }, [user, workspacePath, currentClass]);
 
     return { saveSnapshot, syncAllFiles };

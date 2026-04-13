@@ -26,6 +26,7 @@ export interface ElectronAPI {
   onMenuOpenFolder: (callback: () => void) => () => void;
   onTerminalData: (callback: (data: string) => void) => () => void;
   sendTerminalInput: (data: string) => void;
+  runPythonFile: (relPath: string) => void;
   resizeTerminal: (cols: number, rows: number) => void;
   setTerminalCwd: (cwd: string) => void;
   createDirectory: (path: string) => Promise<boolean>;

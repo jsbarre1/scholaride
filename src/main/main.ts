@@ -18,6 +18,7 @@ if (require("electron-squirrel-startup")) {
 let ptyProcess: any = null;
 let mainWindow: BrowserWindow | null = null;
 let currentTerminalCwd: string = "";
+let terminalSilenceUntilNewline = false;
 let commandBuffer: string = "";
 let currentUserId: string | null = null;
 let currentClassName: string | null = null;
@@ -59,6 +60,10 @@ const initializeWorkspace = async (): Promise<void> => {
   } catch {
     // Workspace doesn't exist, create it
     await fs.mkdir(workspacePath, { recursive: true });
+    
+    // Seed directory integrity
+    const rootIntegrity = path.join(workspacePath, '.scholaride.dir');
+    await fs.writeFile(rootIntegrity, 'authorized', 'utf-8');
 
     // Create a welcome file
     const welcomeFile = path.join(workspacePath, "welcome.md");
@@ -68,7 +73,7 @@ This is your workspace directory. All your files will be stored here.
 
 ## Getting Started
 
-1. Create new files using the file explorer
+1. Use the Assignments tab to start your work
 2. Edit files in the Monaco editor
 3. Run Python files with the Run button
 
@@ -239,6 +244,22 @@ const createPty = (cwd: string) => {
   });
 
   ptyProcess.onData((data: string) => {
+    if (terminalSilenceUntilNewline) {
+      const nlIndex = data.indexOf("\n");
+      if (nlIndex !== -1) {
+        terminalSilenceUntilNewline = false;
+        const remaining = data.substring(nlIndex + 1);
+        if (
+          remaining &&
+          mainWindow &&
+          !mainWindow.isDestroyed() &&
+          mainWindow.webContents
+        ) {
+          mainWindow.webContents.send("terminal-data", remaining);
+        }
+      }
+      return;
+    }
     if (
       mainWindow &&
       !mainWindow.isDestroyed() &&
@@ -312,33 +333,27 @@ const validateCommand = (
       }
     }
 
-    const restrictedCmds = ["cp ", "mv ", "scp ", "rsync "];
-    if (restrictedCmds.some((prefix) => trimmedCmd.startsWith(prefix))) {
-      const parts = trimmedCmd.split(/\s+/);
-      for (const part of parts) {
-        if (part.startsWith("-")) continue;
-        if (
-          part === "cp" ||
-          part === "mv" ||
-          part === "scp" ||
-          part === "rsync"
-        )
-          continue;
+    const cmdParts = trimmedCmd.split(/\s+/);
+    const cmdName = cmdParts[0]?.toLowerCase();
+    const blocked = [
+      "mkdir", "rmdir", "rm", "cp", "mv", "scp", "rsync", 
+      "touch", "tee", "ln", "link", "mkfile", "mktemp",
+      "curl", "wget"
+    ];
+    
+    if (blocked.includes(cmdName)) {
+      return {
+        allowed: false,
+        reason: `Access denied: '${cmdName}' is restricted. Use the Assignments panel or IDE controls.\r\n`,
+      };
+    }
 
-        const cleanPart = part.replace(/['"]/g, "");
-        if (cleanPart) {
-          const resolved = path.resolve(currentTerminalCwd, cleanPart);
-          if (
-            !resolved.startsWith(workspacePath) &&
-            fsSync.existsSync(resolved)
-          ) {
-            return {
-              allowed: false,
-              reason: `Access denied: External file operations are restricted\r\n`,
-            };
-          }
-        }
-      }
+    // Block redirection which can create/overwrite files
+    if (trimmedCmd.includes(">") || trimmedCmd.includes(">>")) {
+      return {
+        allowed: false,
+        reason: "Access denied: Redirection ('>') is restricted to prevent unauthorized file creation.\r\n",
+      };
     }
   }
 
@@ -394,6 +409,34 @@ ipcMain.on("terminal-set-cwd", (event, cwd) => {
   const workspacePath = getWorkspacePath();
   const safeCwd = cwd.startsWith(workspacePath) ? cwd : workspacePath;
   createPty(safeCwd);
+});
+
+ipcMain.on("terminal-run-file", (event, relPath) => {
+  if (!ptyProcess) return;
+
+  const workspacePath = getWorkspacePath();
+  
+  // Use a smart silence: we silence the PTY data being sent to the renderer 
+  // until we see the newline that terminates the command we just sent.
+  // This cleanly hides the 'cd' and the 'python3' echo entirely.
+  const command = ` cd "${workspacePath}" && python3 "${relPath}"\n`;
+
+  // Validation
+  const validation = validateCommand(`cd "${workspacePath}" && python3 "${relPath}"`);
+  if (!validation.allowed) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("terminal-data", `\r\n${validation.reason}`);
+    }
+    return;
+  }
+
+  terminalSilenceUntilNewline = true;
+  ptyProcess.write(command);
+  
+  // Safety timeout in case the newline isn't detected (e.g. shell error)
+  setTimeout(() => {
+    terminalSilenceUntilNewline = false;
+  }, 1000);
 });
 
 // IPC Handlers
@@ -466,7 +509,8 @@ ipcMain.handle("read-file", async (event, filePath) => {
   try {
     const validatedPath = validatePath(filePath);
     return await fs.readFile(validatedPath, "utf-8");
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === 'ENOENT') return null;
     console.error("Error reading file:", error);
     throw error;
   }
@@ -547,11 +591,28 @@ ipcMain.handle("create-file", async (event, filePath) => {
 });
 
 ipcMain.handle("create-directory", async (event, dirPath) => {
+  let validatedPath: string;
   try {
-    const validatedPath = validatePath(dirPath);
+    validatedPath = validatePath(dirPath);
+    
+    // Mark as internal
+    internalWritePaths.add(validatedPath);
+    
     await fs.mkdir(validatedPath, { recursive: true });
+    
+    // Create an integrity sidecar for the directory itself
+    const integrityPath = path.join(validatedPath, '.scholaride.dir');
+    await fs.writeFile(integrityPath, 'authorized', 'utf-8');
+    if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        try { exec(`chflags hidden "${integrityPath}"`); } catch(e) {}
+    }
+
+    directorySnapshots.add(validatedPath);
+    setTimeout(() => internalWritePaths.delete(validatedPath), 1000);
     return true;
   } catch (error) {
+    if (validatedPath) internalWritePaths.delete(validatedPath);
     console.error("Error creating directory:", error);
     throw error;
   }
@@ -581,6 +642,7 @@ ipcMain.handle("delete-path", async (event, targetPath) => {
 
     // Remove from tracking
     fileSnapshots.delete(validatedPath);
+    directorySnapshots.delete(validatedPath);
 
     // Remove from internal write set after 1 second to give Chokidar time to settle
     setTimeout(() => internalWritePaths.delete(validatedPath), 1000);
@@ -639,6 +701,7 @@ const getStoredIntegrityHash = async (
 };
 
 const fileSnapshots = new Map<string, FileSnapshot>();
+const directorySnapshots = new Set<string>();
 const internalWritePaths = new Set<string>();
 const openFiles = new Set<string>(); // Track files currently open in editor
 let currentWatcher: fsSync.FSWatcher | null = null;
@@ -686,8 +749,9 @@ const scanAndTrackFiles = async (dirPath: string): Promise<void> => {
       }
 
       if (entry.isDirectory()) {
+        directorySnapshots.add(fullPath);
         await scanAndTrackFiles(fullPath);
-      } else if (entry.isFile() && !entry.name.endsWith(".scholaride.hash")) {
+      } else if (entry.isFile() && !entry.name.endsWith(".scholaride.hash") && !entry.name.endsWith(".scholaride.dir")) {
         try {
           const content = await fs.readFile(fullPath, "utf-8");
           const stats = await fs.stat(fullPath);
@@ -802,12 +866,38 @@ const handleFileChange = async (
       return;
     }
 
-    // File was modified or created
     const stats = await fs.stat(fullPath);
-
-    // Skip directories and the hidden integrity files themselves
-    if (!stats.isFile() || fullPath.endsWith(".scholaride.hash")) {
+    const isDirectory = stats.isDirectory();
+ 
+    // Skip the hidden integrity files themselves
+    if (fullPath.endsWith(".scholaride.hash") || fullPath.endsWith(".scholaride.dir")) {
       return;
+    }
+ 
+    if (isDirectory) {
+        // Wait a small moment to see if it was an internal creation that hasn't finished yet
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Re-check whitelist and memory tracking after delay
+        if (isPathWhitelisted(fullPath) || directorySnapshots.has(fullPath)) return;
+ 
+        // Check for integrity file on disk as final verification
+        const integrityPath = path.join(fullPath, '.scholaride.dir');
+        if (!fsSync.existsSync(integrityPath)) {
+            console.warn(`\n⚠️  [FileTracker] UNAUTHORIZED DIRECTORY DETECTED\n` +
+              `Directory: ${fullPath}\n` +
+              `Removing unauthorized folder created externally.\n`);
+            
+            const { shell } = require('electron');
+            internalWritePaths.add(fullPath);
+            await shell.trashItem(fullPath);
+            setTimeout(() => internalWritePaths.delete(fullPath), 1000);
+            return;
+        } else {
+            // Authorized but missed in memory? Add it now.
+            directorySnapshots.add(fullPath);
+        }
+        return; 
     }
 
     const snapshot = fileSnapshots.get(fullPath);
@@ -865,10 +955,16 @@ const handleFileChange = async (
   }
 };
 
+let auditInterval: NodeJS.Timeout | null = null;
+
 const startWatching = (dirPath: string) => {
   if (currentWatcher) {
     currentWatcher.close();
     currentWatcher = null;
+  }
+  if (auditInterval) {
+    clearInterval(auditInterval);
+    auditInterval = null;
   }
 
   // Initial scan to track all files
@@ -877,6 +973,39 @@ const startWatching = (dirPath: string) => {
       `[FileTracker] Tracking ${fileSnapshots.size} files in workspace`,
     );
   });
+
+  // PERIODIC AUDIT: Catch folders missed by flaky fs.watch on macOS
+  auditInterval = setInterval(async () => {
+    try {
+        const entries = await fs.readdir(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                const fullPath = path.join(dirPath, entry.name);
+                
+                // Skip ignored
+                const ignored = ["node_modules", ".git", ".DS_Store", ".vscode", ".idea", ".webpack", ".cache", "dist", "out", "build", "coverage"];
+                if (ignored.includes(entry.name)) continue;
+                
+                // Skip whitelisted or already tracked
+                if (isPathWhitelisted(fullPath) || directorySnapshots.has(fullPath)) continue;
+
+                // Check integrity
+                const integrityPath = path.join(fullPath, '.scholaride.dir');
+                if (!fsSync.existsSync(integrityPath)) {
+                    console.warn(`[Integrity Audit] Removing unauthorized directory: ${entry.name}`);
+                    const { shell } = require('electron');
+                    internalWritePaths.add(fullPath);
+                    await shell.trashItem(fullPath);
+                    setTimeout(() => internalWritePaths.delete(fullPath), 1000);
+                } else {
+                    directorySnapshots.add(fullPath);
+                }
+            }
+        }
+    } catch (e) {
+        console.error('[Integrity Audit] Error:', e);
+    }
+  }, 5000);
 
   try {
     // Recursive watching is supported on macOS and Windows (mostly)
@@ -888,6 +1017,8 @@ const startWatching = (dirPath: string) => {
           "node_modules",
           ".git",
           ".DS_Store",
+          ".vscode",
+          ".idea",
           ".webpack",
           ".cache",
           "dist",
@@ -959,6 +1090,10 @@ ipcMain.handle(
 
     if (currentUserId && className) {
       await fs.mkdir(workspacePath, { recursive: true });
+
+      // Seed directory integrity
+      const classIntegrity = path.join(workspacePath, '.scholaride.dir');
+      await fs.writeFile(classIntegrity, 'authorized', 'utf-8');
 
       // Seed a welcome file in the class folder if empty
       const welcomeFile = path.join(workspacePath, "welcome.md");

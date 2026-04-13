@@ -122,8 +122,6 @@ const TerminalPanel: React.FC = () => {
         <div style={{ height: '100%', width: '100%', background: '#1e1e1e', padding: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
             <div style={{ height: '30px', display: 'flex', alignItems: 'center', marginBottom: '5px', borderBottom: '1px solid #333', flexShrink: 0 }}>
                 <span style={{ fontSize: '11px', fontWeight: 600, color: '#bbbbbb', textTransform: 'uppercase', marginRight: '20px' }}>Terminal</span>
-                <span style={{ fontSize: '11px', color: '#888', marginRight: '20px', cursor: 'pointer' }}>Output</span>
-                <span style={{ fontSize: '11px', color: '#888', marginRight: '20px', cursor: 'pointer' }}>Debug Console</span>
             </div>
             <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
                 <div ref={terminalRef} style={{ height: '100%', width: '100%', position: 'absolute', top: 0, left: 0 }} />

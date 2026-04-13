@@ -11,6 +11,7 @@ import ActivityBar from "./components/ActivityBar";
 import StatusBar from "./components/StatusBar";
 import EditorArea from "./components/EditorArea";
 import AiAgentPanel from "./components/AiAgentPanel";
+import AssignmentsPanel from "./components/AssignmentsPanel";
 import LoginScreen from "./components/LoginScreen";
 import { useAuth } from "./context/AuthContext";
 import { useClass } from "./context/ClassContext";
@@ -38,6 +39,7 @@ const App: React.FC = () => {
   const [language, setLanguage] = useState<string>("javascript");
   const [showTerminal, setShowTerminal] = useState(true);
   const [rootPath, setRootPath] = useState<string>("");
+  const [activeSidebarView, setActiveSidebarView] = useState<'files' | 'assignments' | 'search'>('files');
   const [isDirty, setIsDirty] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
@@ -51,6 +53,17 @@ const App: React.FC = () => {
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  // Prevent external file drops
+  useEffect(() => {
+    const preventDefault = (e: DragEvent) => e.preventDefault();
+    window.addEventListener('dragover', preventDefault);
+    window.addEventListener('drop', preventDefault);
+    return () => {
+      window.removeEventListener('dragover', preventDefault);
+      window.removeEventListener('drop', preventDefault);
+    };
+  }, []);
 
   // When user logs in: tell main process which user folder to use.
   useEffect(() => {
@@ -89,6 +102,9 @@ const App: React.FC = () => {
     if (!currentUser || !rootPath || !currentClass) return;
 
     const fileName = filePath.split(/[/\\]/).pop();
+    if (fileName === '.scholaride.dir' || fileName?.endsWith('.scholaride.hash')) {
+        return;
+    }
 
     try {
       let relPath = filePath.replace(rootPath, "");
@@ -166,6 +182,21 @@ const App: React.FC = () => {
       heals.forEach(([path, hash]) => performSelfHeal(path, hash));
     }
   }, [user?.id, rootPath, pendingHeals]);
+
+  // AUTO-SYNC ON LOGIN / BRANCH CHANGE
+  const lastSyncedClassRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (user && rootPath && currentClass) {
+        // Prevent double-trigger if the same class is already being synced
+        if (lastSyncedClassRef.current === currentClass.id) return;
+        lastSyncedClassRef.current = currentClass.id;
+
+        console.log("[App] Triggering automatic workspace sync for:", currentClass.name);
+        syncAllFiles();
+    } else {
+        lastSyncedClassRef.current = null;
+    }
+  }, [user?.id, rootPath, currentClass?.id]);
 
   useEffect(() => {
     const removeMenuListener = window.electronAPI.onMenuOpenFolder(() => {
@@ -290,11 +321,14 @@ const App: React.FC = () => {
 
   const handleRunFile = () => {
     if (selectedFile && language === "python") {
-      let relPath = selectedFile.replace(rootPath, "");
-      // Remove leading slash if present
-      relPath = relPath.replace(/^[/\\]+/, "");
+      // Calculate path relative to root to keep the command clean
+      let relPath = selectedFile;
+      if (selectedFile.startsWith(rootPath)) {
+        relPath = selectedFile.substring(rootPath.length).replace(/^[/\\]+/, "");
+      }
       
-      window.electronAPI.sendTerminalInput(`python3 "${relPath}"\n`);
+      // Use the silent runner to hide the 'cd' command
+      window.electronAPI.runPythonFile(relPath);
       setShowTerminal(true);
     }
   };
@@ -358,7 +392,7 @@ const App: React.FC = () => {
         onUpload={syncAllFiles}
       />
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <ActivityBar />
+        <ActivityBar activeView={activeSidebarView} onViewChange={setActiveSidebarView} />
         <div style={{ flex: 1 }}>
           <Allotment>
             <Allotment.Pane preferredSize={260} minSize={170}>
@@ -371,38 +405,23 @@ const App: React.FC = () => {
                 }}
               >
                 <div style={{ flex: 1, overflow: "hidden" }}>
-                  <FileExplorer
-                    onFileSelect={handleFileSelect}
-                    currentPath={selectedFile || ""}
-                    rootPath={rootPath}
-                    onOpenFolder={handleOpenFolder}
-                    onRefreshRequested={() => {}}
-                    onFileCreated={(path, content) => {
-                      console.log(
-                        "[App] New file created, syncing to cloud:",
-                        path,
-                      );
-                      saveSnapshot(path, content);
-                    }}
-                    onFileMoved={async (oldPath, newPath) => {
-                      console.log(
-                        "[App] File moved, syncing new path to cloud:",
-                        newPath,
-                      );
-                      try {
-                        const content =
-                          await window.electronAPI.readFile(newPath);
-                        saveSnapshot(newPath, content);
-
-                        // If the moved file was the currently open one, update state
-                        if (selectedFile === oldPath) {
-                          setSelectedFile(newPath);
-                        }
-                      } catch (e) {
-                        console.error("[App] Failed to sync move to cloud:", e);
-                      }
-                    }}
-                  />
+                  {activeSidebarView === 'files' ? (
+                    <FileExplorer
+                      onFileSelect={handleFileSelect}
+                      currentPath={selectedFile || ""}
+                      rootPath={rootPath}
+                      onOpenFolder={handleOpenFolder}
+                      onRefreshRequested={() => {}}
+                    />
+                  ) : activeSidebarView === 'assignments' ? (
+                    <AssignmentsPanel 
+                        rootPath={rootPath} 
+                        saveSnapshot={saveSnapshot}
+                        onAssignmentStarted={() => setActiveSidebarView('files')}
+                    />
+                  ) : (
+                    <div style={{ padding: '20px', color: '#666', fontSize: '13px' }}>Search functionality coming soon...</div>
+                  )}
                 </div>
                 <div
                   style={{
