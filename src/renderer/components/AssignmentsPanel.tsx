@@ -23,7 +23,7 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [startedAssignmentDirs, setStartedAssignmentDirs] = useState<Set<string>>(new Set());
-  const [submittedIds, setSubmittedIds] = useState<Set<string>>(new Set());
+  const [submissions, setSubmissions] = useState<Record<string, any>>({});
 
   useEffect(() => {
     if (currentClass && user) {
@@ -82,14 +82,14 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
       // 4. Fetch existing submissions for this user/class
       const { data: submissionsData, error: submissionsError } = await supabase
         .from("submissions")
-        .select("assignment_id")
+        .select("*")
         .eq("student_id", user.id);
 
       if (submissionsError) throw submissionsError;
       
-      const subIds = new Set<string>();
-      submissionsData?.forEach(s => subIds.add(s.assignment_id));
-      setSubmittedIds(subIds);
+      const subMap: Record<string, any> = {};
+      submissionsData?.forEach(s => subMap[s.assignment_id] = s);
+      setSubmissions(subMap);
     } catch (e) {
       console.error("Error fetching assignments:", e);
     } finally {
@@ -177,7 +177,16 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
 
       if (error) throw error;
 
-      setSubmittedIds(prev => new Set(prev).add(assignment.id));
+      // Update local state with the new submission
+      const newSubmission = { 
+        assignment_id: assignment.id, 
+        student_id: user.id, 
+        content: files,
+        submitted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      setSubmissions(prev => ({ ...prev, [assignment.id]: newSubmission }));
+      
       alert(`Assignment "${assignment.title}" submitted successfully!`);
     } catch (e) {
       console.error("Error submitting assignment:", e);
@@ -213,6 +222,8 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
             {assignments.map((a) => {
               const dirName = a.title.replace(/[^a-z0-9]/gi, "_").toLowerCase();
               const isStarted = startedAssignmentDirs.has(dirName);
+              const submission = submissions[a.id];
+              const isSubmitted = !!submission;
 
               return (
                 <div key={a.id} style={{ padding: "12px", background: "#2d2d2d", borderRadius: "4px", border: "1px solid #3c3c3c", opacity: isStarted ? 0.8 : 1 }}>
@@ -268,21 +279,21 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
                     )}
                   </button>
 
-                  {isStarted && (
+                   {isStarted && (
                     <button
-                      onClick={() => !submittedIds.has(a.id) && submitAssignment(a)}
-                      disabled={submittingId === a.id || submittedIds.has(a.id)}
+                      onClick={() => !isSubmitted && submitAssignment(a)}
+                      disabled={submittingId === a.id || isSubmitted}
                       style={{
                         width: "100%",
                         padding: "8px",
                         marginTop: "8px",
-                        background: submittingId === a.id ? "#333" : submittedIds.has(a.id) ? "#1e1e1e" : "#28a745",
-                        color: submittedIds.has(a.id) ? "#28a745" : "#fff",
-                        border: submittedIds.has(a.id) ? "1px solid #28a745" : "none",
+                        background: submittingId === a.id ? "#333" : isSubmitted ? "#1e1e1e" : "#28a745",
+                        color: isSubmitted ? "#28a745" : "#fff",
+                        border: isSubmitted ? "1px solid #28a745" : "none",
                         borderRadius: "3px",
                         fontSize: "11px",
                         fontWeight: 600,
-                        cursor: submittingId === a.id || submittedIds.has(a.id) ? "default" : "pointer",
+                        cursor: submittingId === a.id || isSubmitted ? "default" : "pointer",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -290,17 +301,17 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
                         transition: "all 0.2s",
                       }}
                       onMouseEnter={(e) => {
-                        if (submittingId !== a.id && !submittedIds.has(a.id)) e.currentTarget.style.background = "#218838";
+                        if (submittingId !== a.id && !isSubmitted) e.currentTarget.style.background = "#218838";
                       }}
                       onMouseLeave={(e) => {
-                        if (submittingId !== a.id && !submittedIds.has(a.id)) e.currentTarget.style.background = "#28a745";
+                        if (submittingId !== a.id && !isSubmitted) e.currentTarget.style.background = "#28a745";
                       }}
                     >
                       {submittingId === a.id ? (
                         <>
                           <VscLoading className="animate-spin" /> Submitting...
                         </>
-                      ) : submittedIds.has(a.id) ? (
+                      ) : isSubmitted ? (
                         <>
                           <VscCheck size={14} /> Submitted
                         </>
@@ -310,6 +321,20 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
                         </>
                       )}
                     </button>
+                  )}
+
+                  {isSubmitted && submission.score !== null && (
+                    <div style={{ marginTop: "12px", padding: "10px", background: "rgba(40, 167, 69, 0.1)", borderRadius: "4px", border: "1px solid rgba(40, 167, 69, 0.2)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                        <span style={{ fontSize: "11px", fontWeight: "bold", color: "#28a745", textTransform: "uppercase" }}>Grade Received</span>
+                        <span style={{ fontSize: "13px", fontWeight: "bold", color: "#eee" }}>{submission.score} / 100</span>
+                      </div>
+                      {submission.feedback && (
+                        <div style={{ fontSize: "11px", color: "#aaa", fontStyle: "italic", marginTop: "6px", lineHeight: "1.4" }}>
+                          "{submission.feedback}"
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               );

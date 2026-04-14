@@ -64,31 +64,6 @@ const initializeWorkspace = async (): Promise<void> => {
     // Seed directory integrity
     const rootIntegrity = path.join(workspacePath, '.scholaride.dir');
     await fs.writeFile(rootIntegrity, 'authorized', 'utf-8');
-
-    // Create a welcome file
-    const welcomeFile = path.join(workspacePath, "welcome.md");
-    const welcomeContent = `# Welcome to ScholarIDE!
-
-This is your workspace directory. All your files will be stored here.
-
-## Getting Started
-
-1. Use the Assignments tab to start your work
-2. Edit files in the Monaco editor
-3. Run Python files with the Run button
-
-Happy coding!
-`;
-    await fs.writeFile(welcomeFile, welcomeContent, "utf-8");
-    await saveIntegrityHash(welcomeFile, welcomeContent);
-    
-    // Add to initial snapshots so it doesn't trigger "unknown file" warnings
-    const stats = await fs.stat(welcomeFile);
-    fileSnapshots.set(welcomeFile, {
-      content: welcomeContent,
-      mtime: stats.mtimeMs,
-      hash: hashContent(welcomeContent),
-    });
   }
 };
 
@@ -490,7 +465,10 @@ ipcMain.handle("list-directory", async (event, dirPath) => {
       .filter(
         (entry) =>
           !entry.name.startsWith(".") &&
-          !entry.name.endsWith(".scholaride.hash"),
+          !entry.name.endsWith(".scholaride.hash") &&
+          entry.name !== "__pycache__" &&
+          !entry.name.endsWith(".pyc") &&
+          !entry.name.endsWith(".pyo"),
       )
       .map((entry) => ({
         name: entry.name,
@@ -532,6 +510,9 @@ ipcMain.handle("write-file", async (event, filePath, content) => {
     });
 
     const hash = hashContent(content);
+    const parentDir = path.dirname(validatedPath);
+    await fs.mkdir(parentDir, { recursive: true });
+    
     await fs.writeFile(validatedPath, content, "utf-8");
     await saveIntegrityHash(validatedPath, content);
 
@@ -568,6 +549,9 @@ ipcMain.handle("create-file", async (event, filePath) => {
       hash: hashContent(""),
     });
 
+    const parentDir = path.dirname(validatedPath);
+    await fs.mkdir(parentDir, { recursive: true });
+
     await fs.writeFile(validatedPath, "", "utf-8");
     await saveIntegrityHash(validatedPath, "");
 
@@ -603,10 +587,16 @@ ipcMain.handle("list-all-files", async (event, dirPath) => {
       for (const entry of entries) {
         const fullPath = path.join(currentPath, entry.name);
         
-        // Skip hidden files and ignored directories
-        if (entry.name.startsWith('.') || entry.name.endsWith('.scholaride.hash')) continue;
+        // Skip hidden files, integrity files, and python cache
+        if (
+            entry.name.startsWith('.') || 
+            entry.name.endsWith('.scholaride.hash') ||
+            entry.name === "__pycache__" ||
+            entry.name.endsWith(".pyc") ||
+            entry.name.endsWith(".pyo")
+        ) continue;
         
-        const ignored = ["node_modules", ".git", ".DS_Store", "dist", "out", "build"];
+        const ignored = ["node_modules", ".git", ".DS_Store", "dist", "out", "build", "__pycache__"];
         if (ignored.includes(entry.name)) continue;
 
         if (entry.isDirectory()) {
@@ -768,7 +758,7 @@ const scanAndTrackFiles = async (dirPath: string): Promise<void> => {
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
 
-      // Skip ignored directories
+      // Skip ignored directories and files
       const ignored = [
         "node_modules",
         ".git",
@@ -779,9 +769,14 @@ const scanAndTrackFiles = async (dirPath: string): Promise<void> => {
         "out",
         "build",
         "coverage",
+        "__pycache__",
       ];
 
-      if (ignored.some((ignore) => entry.name.includes(ignore))) {
+      if (
+        ignored.some((ignore) => entry.name.includes(ignore)) ||
+        entry.name.endsWith(".pyc") ||
+        entry.name.endsWith(".pyo")
+      ) {
         continue;
       }
 
@@ -906,8 +901,14 @@ const handleFileChange = async (
     const stats = await fs.stat(fullPath);
     const isDirectory = stats.isDirectory();
  
-    // Skip the hidden integrity files themselves
-    if (fullPath.endsWith(".scholaride.hash") || fullPath.endsWith(".scholaride.dir")) {
+    // Skip hidden integrity files and temporary runtime artifacts
+    if (
+        fullPath.endsWith(".scholaride.hash") || 
+        fullPath.endsWith(".scholaride.dir") ||
+        fullPath.includes("__pycache__") ||
+        fullPath.endsWith(".pyc") ||
+        fullPath.endsWith(".pyo")
+    ) {
       return;
     }
  
@@ -1020,8 +1021,8 @@ const startWatching = (dirPath: string) => {
                 const fullPath = path.join(dirPath, entry.name);
                 
                 // Skip ignored
-                const ignored = ["node_modules", ".git", ".DS_Store", ".vscode", ".idea", ".webpack", ".cache", "dist", "out", "build", "coverage"];
-                if (ignored.includes(entry.name)) continue;
+                const ignored = ["node_modules", ".git", ".DS_Store", ".vscode", ".idea", ".webpack", ".cache", "dist", "out", "build", "coverage", "__pycache__"];
+                if (ignored.includes(entry.name) || entry.name.endsWith(".pyc") || entry.name.endsWith(".pyo")) continue;
                 
                 // Skip whitelisted or already tracked
                 if (isPathWhitelisted(fullPath) || directorySnapshots.has(fullPath)) continue;
@@ -1131,24 +1132,6 @@ ipcMain.handle(
       // Seed directory integrity
       const classIntegrity = path.join(workspacePath, '.scholaride.dir');
       await fs.writeFile(classIntegrity, 'authorized', 'utf-8');
-
-      // Seed a welcome file in the class folder if empty
-      const welcomeFile = path.join(workspacePath, "welcome.md");
-      try {
-        await fs.access(welcomeFile);
-      } catch {
-        const welcomeContent = `# Welcome to ${className}\n\nThis is your focused workspace for this class.\n`;
-        await fs.writeFile(welcomeFile, welcomeContent, "utf-8");
-        await saveIntegrityHash(welcomeFile, welcomeContent);
-
-        // Add to tracking
-        const stats = await fs.stat(welcomeFile);
-        fileSnapshots.set(welcomeFile, {
-          content: welcomeContent,
-          mtime: stats.mtimeMs,
-          hash: hashContent(welcomeContent),
-        });
-      }
     }
 
     currentTerminalCwd = workspacePath;

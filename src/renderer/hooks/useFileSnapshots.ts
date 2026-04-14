@@ -73,6 +73,9 @@ export const useFileSnapshots = (workspacePath: string) => {
 
         isSyncing.current = true;
         console.log('[Sync] Starting robust integrity sync…');
+        let cleanedCount = 0;
+        let restoredCount = 0;
+        let uploadedCount = 0;
 
         try {
             // 1. Fetch Cloud State
@@ -90,33 +93,46 @@ export const useFileSnapshots = (workspacePath: string) => {
                 if (!latestCloudMap.has(s.file_path)) latestCloudMap.set(s.file_path, s.content);
             });
 
-            // 2. CLEANUP: Delete unauthorized local folders
-            const topLevelEntries = await (window as any).electronAPI.listDirectory(workspacePath);
-            let cleanedCount = 0;
-            for (const entry of topLevelEntries) {
-                if (entry.isDirectory) {
-                    const dirName = entry.name.toLowerCase();
-                    const ignored = ["node_modules", ".git", ".vscode", ".idea", ".scholaride"];
-                    if (ignored.includes(dirName)) continue;
+            // 2. CLEANUP: Delete unauthorized local folders at top level
+            if (workspacePath) {
+                const topLevelEntries = await (window as any).electronAPI.listDirectory(workspacePath);
+                for (const entry of topLevelEntries) {
+                    if (entry.isDirectory) {
+                        const dirName = entry.name.toLowerCase();
+                        const ignored = ["node_modules", ".git", ".vscode", ".idea", ".scholaride"];
+                        if (ignored.includes(dirName)) continue;
 
-                    const hasCloudPresence = Array.from(latestCloudMap.keys()).some(
-                        rel => rel.toLowerCase().startsWith(dirName + '/') || rel.toLowerCase() === dirName
-                    );
+                        const hasCloudPresence = Array.from(latestCloudMap.keys()).some(
+                            rel => rel.toLowerCase().startsWith(dirName + '/') || rel.toLowerCase() === dirName
+                        );
 
-                    if (!hasCloudPresence) {
-                        await (window as any).electronAPI.deletePath(entry.path);
-                        cleanedCount++;
+                        if (!hasCloudPresence) {
+                            await (window as any).electronAPI.deletePath(entry.path);
+                            cleanedCount++;
+                        }
                     }
                 }
             }
 
-            // 3. RESTORE MISSING: Ensure all cloud files exist locally
-            let restoredCount = 0;
+            // 3. RESTORE / OVERWRITE: Ensure local files match cloud
             for (const [relPath, content] of latestCloudMap.entries()) {
                 const fullPath = (window as any).electronAPI.pathJoin(workspacePath, relPath);
                 try {
-                    await (window as any).electronAPI.readFile(fullPath);
-                    // Exists, will be checked for tampering in step 4
+                    const localContent = await (window as any).electronAPI.readFile(fullPath);
+                    if (localContent !== content) {
+                        // Check if local change was authorized
+                        const localHash = await quickHash(localContent);
+                        let storedHash: string | null = null;
+                        try { 
+                            storedHash = await (window as any).electronAPI.readFile(fullPath + '.scholaride.hash'); 
+                        } catch (e) {}
+                        
+                        // If it's tampered OR we have no local record of this hash, overwrite with cloud
+                        if (storedHash !== localHash) {
+                            await (window as any).electronAPI.writeFile(fullPath, content);
+                            restoredCount++;
+                        }
+                    }
                 } catch (e) {
                     // Missing! Restore it.
                     const dirPath = (window as any).electronAPI.pathDirname(fullPath);
@@ -126,20 +142,18 @@ export const useFileSnapshots = (workspacePath: string) => {
                 }
             }
 
-            // 4. AUDIT & UPLOAD: Check remaining local files
+            // 4. AUDIT & UPLOAD & PURGE: Check remaining local files
             const localFilePaths = await collectLocalFiles(workspacePath);
-            let uploadedCount = 0;
+            uploadedCount = 0;
             for (const fp of localFilePaths) {
                 const rel = relativePath(workspacePath, fp);
                 const cloudContent = latestCloudMap.get(rel);
                 
                 try {
                     const localContent: string | null = await (window as any).electronAPI.readFile(fp);
-                    if (localContent === null) continue; // File vanished
+                    if (localContent === null) continue;
                     
                     const localHash = await quickHash(localContent);
-
-                    // Check integrity sidecar
                     let storedHash: string | null = null;
                     try {
                         storedHash = await (window as any).electronAPI.readFile(fp + '.scholaride.hash');
@@ -147,15 +161,14 @@ export const useFileSnapshots = (workspacePath: string) => {
 
                     const isTampered = storedHash !== localHash;
 
-                    if (isTampered) {
-                        // REVERT: If different from cloud, overwrite it
-                        if (cloudContent !== undefined && localContent !== cloudContent) {
-                            await (window as any).electronAPI.writeFile(fp, cloudContent);
-                            restoredCount++;
-                        }
-                    } else {
-                        // LEGIT: If newer than cloud, upload it
-                        if (cloudContent !== localContent) {
+                    if (cloudContent === undefined) {
+                        // This file exists locally but NOT on cloud.
+                        // If it was tampered (created outside ScholarIDE), DELETE IT.
+                        if (isTampered) {
+                            await (window as any).electronAPI.deletePath(fp);
+                            cleanedCount++;
+                        } else {
+                            // Legit local creation, upload it.
                             const { error } = await supabase.from('file_snapshots').insert({
                                 user_id: user.id,
                                 class_id: currentClass.id,
@@ -166,6 +179,18 @@ export const useFileSnapshots = (workspacePath: string) => {
                                 localHashCache.current.set(rel, localHash);
                                 uploadedCount++;
                             }
+                        }
+                    } else if (!isTampered && localContent !== cloudContent) {
+                        // LEGIT LOCAL EDIT: Upload newer version to cloud
+                        const { error } = await supabase.from('file_snapshots').insert({
+                            user_id: user.id,
+                            class_id: currentClass.id,
+                            file_path: rel,
+                            content: localContent
+                        });
+                        if (!error) {
+                            localHashCache.current.set(rel, localHash);
+                            uploadedCount++;
                         }
                     }
                 } catch (e) {

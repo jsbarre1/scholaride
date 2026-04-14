@@ -10,7 +10,8 @@ import {
   Search, 
   Bell, 
   LogOut,
-  Loader2
+  Loader2,
+  ShieldAlert
 } from 'lucide-react';
 
 const Layout: React.FC = () => {
@@ -40,6 +41,7 @@ const Layout: React.FC = () => {
     { id: 'courses', label: 'Courses', icon: <BookOpen size={20} />, path: '/courses' },
     { id: 'students', label: 'Students', icon: <Users size={20} />, path: '/students' },
     { id: 'assignments', label: 'Assignments', icon: <ClipboardList size={20} />, path: '/assignments' },
+    { id: 'integrity', label: 'Plagiarism', icon: <ShieldAlert size={20} />, path: '/integrity' },
   ];
 
   if (loading) {

@@ -5,6 +5,7 @@ import Courses from './pages/Courses';
 import CourseDetails from './pages/CourseDetails';
 import Students from './pages/Students';
 import Assignments from './pages/Assignments';
+import Integrity from './pages/Integrity';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
@@ -29,6 +30,7 @@ function App() {
           <Route path="/courses/:courseId" element={<CourseDetails />} />
           <Route path="/students" element={<Students />} />
           <Route path="/assignments" element={<Assignments />} />
+          <Route path="/integrity" element={<Integrity />} />
         </Route>
 
         {/* Default Redirects */}

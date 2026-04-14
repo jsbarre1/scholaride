@@ -141,6 +141,10 @@ const App: React.FC = () => {
       setIsDirty(false);
       window.electronAPI.setTerminalCwd(path);
       setShowTerminal(true);
+      
+      // Immediately trigger sync for the new folder
+      console.log("[App] Directory changed, triggering sync for:", path);
+      syncAllFiles();
     }
   };
 
@@ -229,21 +233,6 @@ const App: React.FC = () => {
       heals.forEach(([path, hash]) => performSelfHeal(path, hash));
     }
   }, [user?.id, rootPath, pendingHeals]);
-
-  // AUTO-SYNC ON LOGIN / BRANCH CHANGE
-  const lastSyncedClassRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (user && rootPath && currentClass) {
-        // Prevent double-trigger if the same class is already being synced
-        if (lastSyncedClassRef.current === currentClass.id) return;
-        lastSyncedClassRef.current = currentClass.id;
-
-        console.log("[App] Triggering automatic workspace sync for:", currentClass.name);
-        syncAllFiles();
-    } else {
-        lastSyncedClassRef.current = null;
-    }
-  }, [user?.id, rootPath, currentClass?.id]);
 
   useEffect(() => {
     const removeMenuListener = window.electronAPI.onMenuOpenFolder(() => {

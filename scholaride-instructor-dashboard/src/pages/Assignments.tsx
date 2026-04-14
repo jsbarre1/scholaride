@@ -12,6 +12,10 @@ import {
   Loader2,
   X,
   PlusCircle,
+  Eye,
+  CheckCircle2,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
 
 interface StarterFile {
@@ -29,6 +33,19 @@ interface Assignment {
   created_at: string;
 }
 
+interface Submission {
+  id: string;
+  assignment_id: string;
+  student_id: string;
+  content: Array<{ path: string; content: string }>;
+  score: number | null;
+  feedback: string | null;
+  submitted_at: string;
+  profiles: {
+    display_name: string;
+  };
+}
+
 interface Course {
   id: string;
   name: string;
@@ -43,9 +60,14 @@ const Assignments: React.FC = () => {
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const initialCourseId = queryParams.get('courseId') || 'all';
   const [selectedCourseId, setSelectedCourseId] = useState<string>(initialCourseId);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
   
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSubmissionsModalOpen, setIsSubmissionsModalOpen] = useState(false);
+  const [viewingAssignment, setViewingAssignment] = useState<Assignment | null>(null);
+  const [viewingSubmission, setViewingSubmission] = useState<Submission | null>(null);
+  const [selectedFileInSubmission, setSelectedFileInSubmission] = useState<number>(0);
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
   const [saving, setSaving] = useState(false);
   
@@ -92,6 +114,19 @@ const Assignments: React.FC = () => {
 
       if (assignmentsError) throw assignmentsError;
       setAssignments(assignmentsData || []);
+
+      // Fetch Submissions with student profiles
+      const { data: submissionsData, error: submissionsError } = await supabase
+        .from('submissions')
+        .select(`
+          *,
+          profiles:student_id (
+            display_name
+          )
+        `);
+
+      if (submissionsError) throw submissionsError;
+      setSubmissions(submissionsData as any || []);
 
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -208,6 +243,16 @@ const Assignments: React.FC = () => {
     return courses.find(c => c.id === id)?.name || 'Unknown Course';
   };
 
+  const getSubmissionCount = (assignmentId: string) => {
+    return submissions.filter(s => s.assignment_id === assignmentId).length;
+  };
+
+  const handleViewSubmissions = (assignment: Assignment) => {
+    setViewingAssignment(assignment);
+    setIsSubmissionsModalOpen(true);
+    setViewingSubmission(null);
+  };
+
   if (loading) {
     return (
       <div style={{ height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -286,7 +331,7 @@ const Assignments: React.FC = () => {
                   <th>Assignment Details</th>
                   <th>Course</th>
                   <th>Due Date</th>
-                  <th>Starter Files</th>
+                  <th>Submissions</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
@@ -313,9 +358,14 @@ const Assignments: React.FC = () => {
                       </div>
                     </td>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
-                        <FileCode size={14} className="text-muted" />
-                        <span>{assignment.starter_files.length} Files</span>
+                      <div 
+                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                        onClick={() => handleViewSubmissions(assignment)}
+                      >
+                         <span className={`badge ${getSubmissionCount(assignment.id) > 0 ? 'badge-success' : 'badge-warning'}`}>
+                          {getSubmissionCount(assignment.id)} Submitted
+                        </span>
+                        <Eye size={14} className="text-muted" />
                       </div>
                     </td>
                     <td style={{ textAlign: 'right' }}>
@@ -593,6 +643,190 @@ const Assignments: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Submissions Modal */}
+      {isSubmissionsModalOpen && viewingAssignment && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '1rem'
+        }}>
+          <div className="card" style={{ 
+            maxWidth: '1000px', 
+            width: '100%', 
+            height: '85vh',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: 0,
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{ 
+              padding: '1.25rem 1.5rem', 
+              borderBottom: '1px solid var(--border-color)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>{viewingAssignment.title} — Submissions</h2>
+                <span className="text-muted" style={{ fontSize: '0.875rem' }}>Review and score student work.</span>
+              </div>
+              <button onClick={() => setIsSubmissionsModalOpen(false)} className="icon-button"><X size={20} /></button>
+            </div>
+
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              {/* Student List */}
+              <div style={{ width: '300px', borderRight: '1px solid var(--border-color)', overflowY: 'auto', background: 'rgba(0,0,0,0.01)' }}>
+                {submissions.filter(s => s.assignment_id === viewingAssignment.id).length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                    No submissions yet.
+                  </div>
+                ) : (
+                  submissions
+                    .filter(s => s.assignment_id === viewingAssignment.id)
+                    .map(s => (
+                      <div 
+                        key={s.id} 
+                        onClick={() => {
+                          setViewingSubmission(s);
+                          setSelectedFileInSubmission(0);
+                        }}
+                        style={{ 
+                          padding: '1rem', 
+                          borderBottom: '1px solid var(--border-color)',
+                          cursor: 'pointer',
+                          background: viewingSubmission?.id === s.id ? 'white' : 'transparent',
+                          borderLeft: viewingSubmission?.id === s.id ? '4px solid var(--primary)' : '4px solid transparent',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.25rem',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{s.profiles?.display_name || 'Anonymous'}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            {new Date(s.submitted_at).toLocaleDateString()}
+                          </span>
+                          {s.score !== null ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 600 }}>Score: {s.score}</span>
+                          ) : (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Unscored</span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                )}
+              </div>
+
+              {/* Submission Viewer */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                {viewingSubmission ? (
+                  <>
+                    {/* Controls/Files */}
+                    <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', background: 'white' }}>
+                       <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+                        {viewingSubmission.content.map((file, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => setSelectedFileInSubmission(idx)}
+                            style={{
+                              padding: '0.4rem 0.8rem',
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid',
+                              borderColor: selectedFileInSubmission === idx ? 'var(--primary)' : 'var(--border-color)',
+                              background: selectedFileInSubmission === idx ? 'rgba(var(--primary-rgb, 59, 130, 246), 0.1)' : 'white',
+                              color: selectedFileInSubmission === idx ? 'var(--primary)' : 'var(--text-main)',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              whiteSpace: 'nowrap',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {file.path}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Code Viewer */}
+                    <div style={{ flex: 1, background: '#1e1e1e', overflowY: 'auto', padding: '1.5rem', fontFamily: 'monospace', fontSize: '13px', color: '#d4d4d4', whiteSpace: 'pre-wrap' }}>
+                      {viewingSubmission.content[selectedFileInSubmission]?.content}
+                    </div>
+
+                    {/* Grading Footer */}
+                    <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-color)', background: 'white', display: 'flex', gap: '1rem', alignItems: 'flex-end' }}>
+                       <div style={{ flex: 1 }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.4rem' }}>Feedback</label>
+                        <textarea 
+                          placeholder="Provide feedback to the student..."
+                          rows={1}
+                          style={{ 
+                            width: '100%',
+                            padding: '0.5rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border-color)',
+                            background: 'var(--bg-main)',
+                            fontSize: '0.875rem',
+                            resize: 'none'
+                          }}
+                          value={viewingSubmission.feedback || ''}
+                          onChange={async (e) => {
+                             const val = e.target.value;
+                             const updated = {...viewingSubmission, feedback: val};
+                             setViewingSubmission(updated);
+                             setSubmissions(submissions.map(sub => sub.id === updated.id ? updated : sub));
+                             
+                             // Debounced or simple update
+                             await supabase.from('submissions').update({ feedback: val }).eq('id', updated.id);
+                          }}
+                        />
+                      </div>
+                      <div style={{ width: '100px' }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.4rem' }}>Score</label>
+                        <input 
+                          type="number"
+                          placeholder="0-100"
+                          style={{ 
+                            width: '100%',
+                            padding: '0.5rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border-color)',
+                            background: 'var(--bg-main)',
+                            fontSize: '0.875rem'
+                          }}
+                          value={viewingSubmission.score === null ? '' : viewingSubmission.score}
+                          onChange={async (e) => {
+                             const val = e.target.value === '' ? null : Number(e.target.value);
+                             const updated = {...viewingSubmission, score: val};
+                             setViewingSubmission(updated);
+                             setSubmissions(submissions.map(sub => sub.id === updated.id ? updated : sub));
+                             
+                             await supabase.from('submissions').update({ score: val }).eq('id', updated.id);
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: '1rem' }}>
+                    <ClipboardList size={64} style={{ opacity: 0.1 }} />
+                    <p>Select a student to view their submission.</p>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
