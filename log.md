@@ -11,5 +11,6 @@
 | Apr 8, 2026 | File tracker and restoration for if someone edits externally. Classes and instructors set up| 4 |
 | Apr 9, 2026 | File system upgrades and instructor dashboard UI | 4 |
 | Apr 13, 2026 | Assignments for dashboard and app, internal copying and pasting only based on hashing | 4 |
-| **Total** | | **36** |
+| Apr 13, 2026 | Hashing also includes a no-whitespace version | 1 |
+| **Total** | | **37** |
 
