@@ -13,9 +13,8 @@ import {
   X,
   PlusCircle,
   Eye,
-  CheckCircle2,
-  ChevronRight,
-  ChevronDown,
+  AlertCircle,
+  Pencil,
 } from 'lucide-react';
 
 interface StarterFile {
@@ -37,7 +36,8 @@ interface Submission {
   id: string;
   assignment_id: string;
   student_id: string;
-  content: Array<{ path: string; content: string }>;
+  // content now comes via submission_snapshots → file_snapshots
+  snapshots: Array<{ file_path: string; content: string; snapshot_id: string }>;
   score: number | null;
   feedback: string | null;
   submitted_at: string;
@@ -51,6 +51,12 @@ interface Course {
   name: string;
 }
 
+interface DuplicateSnapshot {
+  class_id: string;
+  file_path: string;
+  student_ids: string[];
+}
+
 const Assignments: React.FC = () => {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -61,6 +67,7 @@ const Assignments: React.FC = () => {
   const initialCourseId = queryParams.get('courseId') || 'all';
   const [selectedCourseId, setSelectedCourseId] = useState<string>(initialCourseId);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [duplicates, setDuplicates] = useState<DuplicateSnapshot[]>([]);
   
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -115,18 +122,46 @@ const Assignments: React.FC = () => {
       if (assignmentsError) throw assignmentsError;
       setAssignments(assignmentsData || []);
 
-      // Fetch Submissions with student profiles
+      // Fetch Submissions with student profiles and linked snapshot content
       const { data: submissionsData, error: submissionsError } = await supabase
         .from('submissions')
         .select(`
-          *,
+          id,
+          assignment_id,
+          student_id,
+          score,
+          feedback,
+          submitted_at,
           profiles:student_id (
             display_name
+          ),
+          submission_snapshots (
+            snapshot_id,
+            file_snapshots:snapshot_id (
+              file_path,
+              content
+            )
           )
         `);
 
       if (submissionsError) throw submissionsError;
-      setSubmissions(submissionsData as any || []);
+
+      // Flatten snapshot content into a simple array per submission
+      const shaped = (submissionsData || []).map((s: any) => ({
+        ...s,
+        snapshots: (s.submission_snapshots || []).map((ss: any) => ({
+          snapshot_id: ss.snapshot_id,
+          file_path: ss.file_snapshots?.file_path || '',
+          content:    ss.file_snapshots?.content    || '',
+        })),
+      }));
+      setSubmissions(shaped as any);
+
+      // Fetch duplicate_snapshots to identify plagiarism flags
+      const { data: dupsData } = await supabase
+        .from('duplicate_snapshots')
+        .select('class_id, file_path, student_ids');
+      setDuplicates(dupsData || []);
 
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -253,6 +288,45 @@ const Assignments: React.FC = () => {
     setViewingSubmission(null);
   };
 
+  const handleGradeSubmission = (submission: Submission) => {
+    const assignment = assignments.find(a => a.id === submission.assignment_id) || null;
+    setViewingAssignment(assignment);
+    setIsSubmissionsModalOpen(true);
+    setViewingSubmission(submission);
+    setSelectedFileInSubmission(0);
+  };
+
+  const unscoredSubmissions = useMemo(() => {
+    const filtered = submissions.filter(s => {
+      if (s.score !== null) return false;
+      if (selectedCourseId === 'all') return true;
+      const assignment = assignments.find(a => a.id === s.assignment_id);
+      return assignment?.class_id === selectedCourseId;
+    });
+
+    return filtered.map(s => {
+      const assignment = assignments.find(a => a.id === s.assignment_id);
+      const classId = assignment?.class_id;
+
+      // Assignment-specific: only flag if the student has a duplicate on a file path
+      // that actually exists within this submission's linked snapshots
+      const flaggedFile = classId
+        ? duplicates.find(d =>
+            d.class_id === classId &&
+            d.student_ids.includes(s.student_id) &&
+            s.snapshots.some((snap: any) => snap.file_path === d.file_path)
+          )
+        : null;
+
+      return {
+        ...s,
+        assignmentTitle: assignment?.title || 'Unknown Assignment',
+        hasPlagiarismFlag: !!flaggedFile,
+        flaggedFilePath: flaggedFile?.file_path,
+      };
+    });
+  }, [submissions, assignments, selectedCourseId, duplicates]);
+
   if (loading) {
     return (
       <div style={{ height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -318,6 +392,108 @@ const Assignments: React.FC = () => {
           {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </div>
+
+      {/* Needs Grading Panel */}
+      {unscoredSubmissions.length > 0 && (
+        <div className="card" style={{ marginBottom: '2rem', border: '1px solid #fde68a' }}>
+          <div className="card-header" style={{ background: 'linear-gradient(135deg, #fffbeb, #fef9c3)', borderBottom: '1px solid #fde68a', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <AlertCircle size={18} color="#d97706" />
+              <h3 className="card-title" style={{ color: '#92400e' }}>Needs Grading</h3>
+              <span style={{
+                background: '#d97706',
+                color: 'white',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                padding: '0.15rem 0.55rem',
+                borderRadius: '999px',
+                lineHeight: 1.5
+              }}>{unscoredSubmissions.length}</span>
+            </div>
+            <span style={{ fontSize: '0.8rem', color: '#92400e', opacity: 0.8 }}>
+              Submissions awaiting a score
+            </span>
+          </div>
+          <div className="card-content" style={{ padding: 0 }}>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Student</th>
+                    <th>Assignment</th>
+                    <th>Submitted</th>
+                    <th>Flags</th>
+                    <th style={{ textAlign: 'right' }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unscoredSubmissions.map(sub => (
+                    <tr key={sub.id}>
+                      <td>
+                        <div className="student-cell">
+                          <div className="student-avatar" style={{ background: '#d97706', color: 'white', fontSize: '0.8rem' }}>
+                            {(sub.profiles?.display_name || '?').charAt(0).toUpperCase()}
+                          </div>
+                          <span style={{ fontWeight: 600 }}>{sub.profiles?.display_name || 'Anonymous'}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span style={{ fontWeight: 500 }}>{sub.assignmentTitle}</span>
+                      </td>
+                      <td style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                        {new Date(sub.submitted_at).toLocaleDateString([], { dateStyle: 'medium' })}
+                      </td>
+                      <td>
+                        {sub.hasPlagiarismFlag ? (
+                          <span 
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              border: '1px solid #fca5a5',
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '999px',
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              whiteSpace: 'nowrap',
+                              cursor: 'help'
+                            }}
+                            title={`Shared logic detected in: ${sub.flaggedFilePath}`}
+                          >
+                            <AlertCircle size={12} />
+                            Plagiarism Flag
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>—</span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          className="nav-item"
+                          onClick={() => handleGradeSubmission(sub)}
+                          style={{
+                            background: '#d97706',
+                            color: 'white',
+                            padding: '0.4rem 0.9rem',
+                            fontSize: '0.8rem',
+                            gap: '0.35rem',
+                            borderRadius: 'var(--radius-md)'
+                          }}
+                        >
+                          <Pencil size={13} />
+                          <span>Grade</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-header">
@@ -737,7 +913,7 @@ const Assignments: React.FC = () => {
                     {/* Controls/Files */}
                     <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', background: 'white' }}>
                        <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
-                        {viewingSubmission.content.map((file, idx) => (
+                        {viewingSubmission.snapshots.map((file, idx) => (
                           <button
                             key={idx}
                             onClick={() => setSelectedFileInSubmission(idx)}
@@ -754,7 +930,7 @@ const Assignments: React.FC = () => {
                               cursor: 'pointer'
                             }}
                           >
-                            {file.path}
+                            {file.file_path.split('/').pop()}
                           </button>
                         ))}
                       </div>
@@ -762,7 +938,7 @@ const Assignments: React.FC = () => {
 
                     {/* Code Viewer */}
                     <div style={{ flex: 1, background: '#1e1e1e', overflowY: 'auto', padding: '1.5rem', fontFamily: 'monospace', fontSize: '13px', color: '#d4d4d4', whiteSpace: 'pre-wrap' }}>
-                      {viewingSubmission.content[selectedFileInSubmission]?.content}
+                      {viewingSubmission.snapshots[selectedFileInSubmission]?.content}
                     </div>
 
                     {/* Grading Footer */}

@@ -19,6 +19,7 @@ interface Student {
   snapshot_count: number;
   last_active: string | null;
   class_id: string;
+  grade: number | null;
 }
 
 interface ClassGroup {
@@ -63,6 +64,7 @@ const Students: React.FC = () => {
         .from('enrollments')
         .select(`
           enrolled_at,
+          grade,
           class_id,
           profiles:student_id (
             id,
@@ -100,6 +102,7 @@ const Students: React.FC = () => {
             const stats = statsMap[`${e.profiles.id}_${c.id}`];
             return {
               id: e.profiles.id,
+              grade: e.grade,
               display_name: e.profiles.display_name || 'Anonymous Student',
               enrolled_at: e.enrolled_at,
               snapshot_count: stats?.count || 0,
@@ -219,6 +222,7 @@ const Students: React.FC = () => {
                         <tr>
                           <th>Student Name</th>
                           <th>Join Date</th>
+                          <th>Grade</th>
                           <th>Last Active</th>
                           <th>Snapshots</th>
                           <th style={{ textAlign: 'right' }}>Actions</th>
@@ -239,6 +243,20 @@ const Students: React.FC = () => {
                               </div>
                             </td>
                             <td>{new Date(student.enrolled_at).toLocaleDateString()}</td>
+                            <td>
+                              {student.grade != null ? (
+                                <span className={`badge ${
+                                  student.grade >= 85 ? 'badge-success' :
+                                  student.grade >= 70 ? 'badge-info' :
+                                  student.grade >= 50 ? 'badge-warning' :
+                                  'badge-danger'
+                                }`}>
+                                  {Number(student.grade).toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="badge badge-neutral">N/A</span>
+                              )}
+                            </td>
                             <td>{student.last_active ? new Date(student.last_active).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'Never'}</td>
                             <td>
                               <span className={`badge ${student.snapshot_count > 0 ? 'badge-success' : 'badge-warning'}`}>

@@ -369,6 +369,16 @@ tr:last-child td {
   color: #2563eb;
 }
 
+.badge-danger {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.badge-neutral {
+  background-color: rgba(100, 116, 139, 0.1);
+  color: #64748b;
+}
+
 /* Activity Feed */
 .activity-feed {
   display: flex;

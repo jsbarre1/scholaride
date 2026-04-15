@@ -8,7 +8,8 @@ import {
   MoreVertical,
   TrendingUp,
   Clock,
-  Loader2
+  Loader2,
+  ShieldAlert
 } from 'lucide-react'
 import '../App.css'
 
@@ -18,7 +19,7 @@ const Dashboard: React.FC = () => {
     { label: 'Total Students', value: '0', trend: '0%', trendUp: true, icon: <Users size={20} />, iconBg: '#eef2ff', iconColor: '#6366f1' },
     { label: 'Active Courses', value: '0', trend: '0%', trendUp: true, icon: <BookOpen size={20} />, iconBg: '#fff7ed', iconColor: '#f97316' },
     { label: 'Total Snapshots', value: '0', trend: '0%', trendUp: true, icon: <ClipboardList size={20} />, iconBg: '#f0fdf4', iconColor: '#22c55e' },
-    { label: 'Integrity Alerts', value: '0', trend: '0%', trendUp: false, icon: <TrendingUp size={20} />, iconBg: '#fef2f2', iconColor: '#ef4444' },
+    { label: 'Plagiarism Alerts', value: '0', trend: '0%', trendUp: false, icon: <ShieldAlert size={20} />, iconBg: '#fef2f2', iconColor: '#ef4444' },
   ])
 
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([])
@@ -71,7 +72,15 @@ const Dashboard: React.FC = () => {
 
       if (snapshotError) console.error("Snapshot count error:", snapshotError)
 
-      // 4. Fetch Recent Submissions / Snapshots with Student Info
+      // 4. Fetch Plagiarism Alerts (duplicate snapshots)
+      const { count: alertsCount, error: alertsError } = await supabase
+        .from('duplicate_snapshots')
+        .select('*', { count: 'exact', head: true })
+        .in('class_id', classIds)
+
+      if (alertsError) console.error("Alerts count error:", alertsError)
+
+      // 5. Fetch Recent Submissions / Snapshots with Student Info
       const { data: snapshots, error: fetchSnapshotsError } = await supabase
         .from('file_snapshots')
         .select(`
@@ -88,15 +97,15 @@ const Dashboard: React.FC = () => {
 
       if (fetchSnapshotsError) console.error("Snapshots fetch error:", fetchSnapshotsError)
 
-      // 5. Update Stats
+      // 6. Update Stats
       setStats(prev => [
         { ...prev[0], value: (studentCount || 0).toString() },
         { ...prev[1], value: (classes?.length || 0).toString() },
         { ...prev[2], value: (snapshotCount || 0).toString() },
-        { ...prev[3], value: '0' },
+        { ...prev[3], value: (alertsCount || 0).toString() },
       ])
 
-      // 6. Update Submissions
+      // 7. Update Submissions
       if (snapshots) {
         setRecentSubmissions(snapshots.map(s => ({
           id: s.id,
@@ -105,11 +114,10 @@ const Dashboard: React.FC = () => {
           course: (s as any).classes?.name || 'Unknown Course',
           date: new Date(s.saved_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           status: 'Synced',
-          grade: '-'
         })))
       }
 
-      // 7. Mock Activities
+      // 8. Mock Activities
       if (snapshots) {
         setActivities(snapshots.slice(0, 4).map(s => ({
           id: s.id,
@@ -151,15 +159,15 @@ const Dashboard: React.FC = () => {
               <div className="stat-icon" style={{ backgroundColor: stat.iconBg, color: stat.iconColor }}>
                 {stat.icon}
               </div>
-              <button className="icon-button" style={{ width: '24px', height: '24px' }}>
+              {/* <button className="icon-button" style={{ width: '24px', height: '24px' }}>
                 <MoreVertical size={16} />
-              </button>
+              </button> */}
             </div>
             <div className="stat-value">{stat.value}</div>
             <div className="stat-label">{stat.label}</div>
-            <div className={`stat-trend ${stat.trendUp ? 'trend-up' : 'trend-down'}`}>
+            {/* <div className={`stat-trend ${stat.trendUp ? 'trend-up' : 'trend-down'}`}>
               {stat.trendUp ? '↑' : '↓'} {stat.trend} <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>since last month</span>
-            </div>
+            </div> */}
           </div>
         ))}
       </div>
@@ -182,7 +190,6 @@ const Dashboard: React.FC = () => {
                     <th>Student</th>
                     <th>File</th>
                     <th>Status</th>
-                    <th>Grade</th>
                     <th>Time</th>
                   </tr>
                 </thead>
@@ -206,7 +213,6 @@ const Dashboard: React.FC = () => {
                           {sub.status}
                         </span>
                       </td>
-                      <td style={{ fontWeight: 600 }}>{sub.grade}</td>
                       <td>{sub.date}</td>
                     </tr>
                   ))}
