@@ -142,9 +142,9 @@ const App: React.FC = () => {
       window.electronAPI.setTerminalCwd(path);
       setShowTerminal(true);
       
-      // Immediately trigger sync for the new folder
+      // Pass the new path directly so syncAllFiles doesn't use the stale rootPath closure
       console.log("[App] Directory changed, triggering sync for:", path);
-      syncAllFiles();
+      syncAllFiles(path);
     }
   };
 
@@ -355,8 +355,19 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRunFile = () => {
+  const handleRunFile = async () => {
     if (selectedFile && language === "python") {
+      // Save the file before running so the latest changes are executed
+      if (isDirty) {
+        try {
+          await window.electronAPI.writeFile(selectedFile, fileContent);
+          setIsDirty(false);
+          saveSnapshot(selectedFile, fileContent);
+        } catch (error) {
+          console.error("Failed to save file before run:", error);
+        }
+      }
+
       // Calculate path relative to root to keep the command clean
       let relPath = selectedFile;
       if (selectedFile.startsWith(rootPath)) {
@@ -425,7 +436,7 @@ const App: React.FC = () => {
         selectedFile={selectedFile}
         onAiToggle={() => setShowAiPanel(!showAiPanel)}
         isAiActive={showAiPanel}
-        onUpload={syncAllFiles}
+        onUpload={() => syncAllFiles(rootPath)}
       />
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <ActivityBar activeView={activeSidebarView} onViewChange={setActiveSidebarView} />

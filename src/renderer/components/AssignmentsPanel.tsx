@@ -146,7 +146,7 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
   };
 
   const submitAssignment = async (assignment: Assignment) => {
-    if (!rootPath || !user) return;
+    if (!rootPath || !user || !currentClass) return;
 
     const confirmSubmit = window.confirm(`Are you sure you want to submit "${assignment.title}"? This will upload your current code for grading.`);
     if (!confirmSubmit) return;
@@ -164,29 +164,64 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
         return;
       }
 
-      // 2. Submit to Supabase
-      const { error } = await supabase
+      // 2. Upsert the submission row (no content — just metadata)
+      const { data: submissionRow, error: subError } = await supabase
         .from("submissions")
         .upsert({
           assignment_id: assignment.id,
           student_id: user.id,
-          content: files,
           submitted_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        });
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "assignment_id,student_id" })
+        .select("id")
+        .single();
 
-      if (error) throw error;
+      if (subError) throw subError;
+      const submissionId = submissionRow.id;
 
-      // Update local state with the new submission
-      const newSubmission = { 
-        assignment_id: assignment.id, 
-        student_id: user.id, 
-        content: files,
+      // 3. Force-save a fresh snapshot for each file and collect the snapshot IDs
+      const snapshotIds: string[] = [];
+      for (const file of files) {
+        // Save/update the cloud snapshot for this file
+        await saveSnapshot(file.path, file.content);
+
+        // Fetch the snapshot we just saved (latest by saved_at for this path/user/class)
+        const relativePath = file.path.replace(rootPath + "/", "");
+        const { data: snap } = await supabase
+          .from("file_snapshots")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("class_id", currentClass.id)
+          .eq("file_path", relativePath)
+          .order("saved_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (snap) snapshotIds.push(snap.id);
+      }
+
+      // 4. Link each snapshot to this submission (upsert to be idempotent)
+      if (snapshotIds.length > 0) {
+        const links = snapshotIds.map(sid => ({
+          submission_id: submissionId,
+          snapshot_id: sid,
+        }));
+        const { error: linkError } = await supabase
+          .from("submission_snapshots")
+          .upsert(links, { onConflict: "submission_id,snapshot_id" });
+        if (linkError) console.error("[Submit] Failed to link snapshots:", linkError);
+      }
+
+      // Update local state
+      const newSubmission = {
+        id: submissionId,
+        assignment_id: assignment.id,
+        student_id: user.id,
         submitted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       };
       setSubmissions(prev => ({ ...prev, [assignment.id]: newSubmission }));
-      
+
       alert(`Assignment "${assignment.title}" submitted successfully!`);
     } catch (e) {
       console.error("Error submitting assignment:", e);

@@ -67,12 +67,13 @@ export const useFileSnapshots = (workspacePath: string) => {
         }
     }, [user, workspacePath, currentClass]);
 
-    const syncAllFiles = useCallback(async (): Promise<void> => {
-        if (!user || !workspacePath || !currentClass) return;
+    const syncAllFiles = useCallback(async (pathOverride?: string): Promise<void> => {
+        const effectivePath = pathOverride || workspacePath;
+        if (!user || !effectivePath || !currentClass) return;
         if (isSyncing.current) return;
 
         isSyncing.current = true;
-        console.log('[Sync] Starting robust integrity sync…');
+        console.log('[Sync] Starting robust integrity sync for path:', effectivePath);
         let cleanedCount = 0;
         let restoredCount = 0;
         let uploadedCount = 0;
@@ -94,8 +95,8 @@ export const useFileSnapshots = (workspacePath: string) => {
             });
 
             // 2. CLEANUP: Delete unauthorized local folders at top level
-            if (workspacePath) {
-                const topLevelEntries = await (window as any).electronAPI.listDirectory(workspacePath);
+            if (effectivePath) {
+                const topLevelEntries = await (window as any).electronAPI.listDirectory(effectivePath);
                 for (const entry of topLevelEntries) {
                     if (entry.isDirectory) {
                         const dirName = entry.name.toLowerCase();
@@ -116,7 +117,7 @@ export const useFileSnapshots = (workspacePath: string) => {
 
             // 3. RESTORE / OVERWRITE: Ensure local files match cloud
             for (const [relPath, content] of latestCloudMap.entries()) {
-                const fullPath = (window as any).electronAPI.pathJoin(workspacePath, relPath);
+                const fullPath = (window as any).electronAPI.pathJoin(effectivePath, relPath);
                 try {
                     const localContent = await (window as any).electronAPI.readFile(fullPath);
                     if (localContent !== content) {
@@ -143,10 +144,10 @@ export const useFileSnapshots = (workspacePath: string) => {
             }
 
             // 4. AUDIT & UPLOAD & PURGE: Check remaining local files
-            const localFilePaths = await collectLocalFiles(workspacePath);
+            const localFilePaths = await collectLocalFiles(effectivePath);
             uploadedCount = 0;
             for (const fp of localFilePaths) {
-                const rel = relativePath(workspacePath, fp);
+                const rel = relativePath(effectivePath, fp);
                 const cloudContent = latestCloudMap.get(rel);
                 
                 try {

@@ -494,6 +494,52 @@ ipcMain.handle("read-file", async (event, filePath) => {
   }
 });
 
+/**
+ * Ensures every directory segment from `workspacePath` down to `dirPath`
+ * is created with a `.scholaride.dir` integrity marker and registered
+ * in both `internalWritePaths` and `directorySnapshots`. This prevents the
+ * FileTracker from treating sync-restored folders as unauthorized.
+ */
+const ensureAuthorizedDirectory = async (dirPath: string): Promise<void> => {
+  const workspacePath = getWorkspacePath();
+  const resolvedDir = path.resolve(dirPath);
+
+  // Collect every segment between workspacePath and the target dir
+  const segments: string[] = [];
+  let current = resolvedDir;
+  while (current !== workspacePath && current !== path.dirname(current)) {
+    if (!directorySnapshots.has(current) && !fsSync.existsSync(path.join(current, '.scholaride.dir'))) {
+      segments.unshift(current);
+    } else {
+      break; // parent already authorized – stop climbing
+    }
+    current = path.dirname(current);
+  }
+
+  // Pre-whitelist all new dirs so the watcher ignores them
+  for (const seg of segments) {
+    internalWritePaths.add(seg);
+  }
+
+  // Create with recursive mkdir
+  await fs.mkdir(resolvedDir, { recursive: true });
+
+  // Seed integrity marker and register each new level
+  for (const seg of segments) {
+    const integrityPath = path.join(seg, '.scholaride.dir');
+    try {
+      await fs.writeFile(integrityPath, 'authorized', 'utf-8');
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        try { exec(`chflags hidden "${integrityPath}"`); } catch (e) {}
+      }
+    } catch (e) { /* already exists is fine */ }
+    directorySnapshots.add(seg);
+    // Keep whitelisted for 2s to let both the watcher and audit interval pass
+    setTimeout(() => internalWritePaths.delete(seg), 2000);
+  }
+};
+
 ipcMain.handle("write-file", async (event, filePath, content) => {
   let validatedPath: string;
   try {
@@ -511,7 +557,7 @@ ipcMain.handle("write-file", async (event, filePath, content) => {
 
     const hash = hashContent(content);
     const parentDir = path.dirname(validatedPath);
-    await fs.mkdir(parentDir, { recursive: true });
+    await ensureAuthorizedDirectory(parentDir);
     
     await fs.writeFile(validatedPath, content, "utf-8");
     await saveIntegrityHash(validatedPath, content);
@@ -550,7 +596,7 @@ ipcMain.handle("create-file", async (event, filePath) => {
     });
 
     const parentDir = path.dirname(validatedPath);
-    await fs.mkdir(parentDir, { recursive: true });
+    await ensureAuthorizedDirectory(parentDir);
 
     await fs.writeFile(validatedPath, "", "utf-8");
     await saveIntegrityHash(validatedPath, "");
