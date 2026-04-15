@@ -95,10 +95,3 @@ This project is very interesting to me because I feel that AI has distracted fro
 
 ### Authentication
 - Scholaride uses Supabase to manage authentication and authorization. RLS locks down the database properly so that students and instructors have different access.
-
-
-## Teams Post
-[Link to teams post](https://teams.microsoft.com/l/message/19:01986f3a1f6a4ece8d64bb40d89bf09d@thread.tacv2/1776269279623?tenantId=c6fc6e9b-51fb-48a8-b779-9ee564b40413&groupId=5d8ddfcb-a9e8-4785-b9d1-c4579b243975&parentMessageId=1776269279623&teamName=CS%20452%20(Winter%202026)&channelName=Report%20-%20Final%20Project&createdTime=1776269279623)
-
-## Sharing Status
-No, Don't Share
