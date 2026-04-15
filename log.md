@@ -12,5 +12,6 @@
 | Apr 9, 2026 | File system upgrades and instructor dashboard UI | 4 |
 | Apr 13, 2026 | Assignments for dashboard and app, internal copying and pasting only based on hashing | 4 |
 | Apr 13, 2026 | Hashing also includes a no-whitespace version | 1 |
-| **Total** | | **37** |
+| Apr 14, 2026 | Bug fix for sync workspace, grades, plagiarism indications | 2 |
+| **Total** | | **39** |
 
