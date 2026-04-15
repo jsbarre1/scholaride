@@ -497,14 +497,14 @@ const Assignments: React.FC = () => {
 
       <div className="card">
         <div className="card-header">
-          <h3 className="card-title">All Assignments</h3>
+          <h3 className="card-title">All Submissions</h3>
         </div>
         <div className="card-content" style={{ padding: 0 }}>
           <div className="table-container">
             <table>
               <thead>
                 <tr>
-                  <th>Assignment Details</th>
+                  <th>Submission Details</th>
                   <th>Course</th>
                   <th>Due Date</th>
                   <th>Submissions</th>

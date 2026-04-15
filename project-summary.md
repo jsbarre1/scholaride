@@ -49,73 +49,61 @@ The main process runs a **File Watcher + Snapshot Guard** that:
 3. If a change was NOT triggered internally by ScholarIDE → it is immediately reverted and the student is alerted
 4. The terminal is sandboxed to the workspace directory — `cd` outside it is blocked
 
-## ERD — Data the Project Uses
+## ERD
 
 ```
 ┌─────────────────────────────────┐   ┌─────────────────────────────────┐
-│    Supabase Auth (users)        │   │   Supabase Storage              │
+│     Supabase Auth (users)       │   │   Supabase Storage              │
 │─────────────────────────────────│   │─────────────────────────────────│
 │ id (uuid)                       │   │ workspaces/                     │
 │ email                           │   │   {user_id}/                    │
-│ created_at                      │   │     welcome.md                  │
-│ last_sign_in_at                 │   │     project/                    │
-└─────────────────────────────────┘   │       main.py                   │
-         │                            └─────────────────────────────────┘
-         │ (future)
-         ▼
-┌─────────────────────────────────┐
-│   audit_logs (Supabase DB)      │   ← PLANNED
-│─────────────────────────────────│
-│ id                              │
-│ user_id → auth.users            │
-│ file_path                       │
-│ event_type (open/save/run/ai)   │
-│ content_snapshot                │
-│ timestamp                       │
-└─────────────────────────────────┘
-         │
-         │ belongs to
-         ▼
-┌─────────────────────────────────┐
-│   assignments (Supabase DB)     │
-│─────────────────────────────────│
-│ id (uuid)                       │
-│ class_id → classes.id           │
-│ title (text)                    │
-│ description (text)              │
-│ due_date (timestamptz)          │
-│ starter_files (jsonb)           │
-│ created_at (timestamptz)        │
-└─────────────────────────────────┘
-         │
-         │ referenced by
-         ▼
-┌─────────────────────────────────┐
-│   submissions (Supabase DB)     │
-│─────────────────────────────────│
-│ id (uuid)                       │
-│ assignment_id → assignments.id  │
-│ student_id → profiles.id        │
-│ content (jsonb)                 │
-│ score (numeric)                 │
-│ feedback (text)                 │
-│ submitted_at (timestamptz)      │
-│ updated_at (timestamptz)        │
-└─────────────────────────────────┘
-         │
-         │ referenced by
-         ▼
-┌─────────────────────────────────┐
-│  ai_interactions (Supabase DB)  │   ← PLANNED
-│─────────────────────────────────│
-│ id                              │
-│ user_id → auth.users            │
-│ assignment_id → assignments     │
-│ role (user / assistant)         │
-│ content (text)                  │
-│ timestamp                       │
-└─────────────────────────────────┘
+└─────────────────────────────────┘   └─────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+│           profiles              │   │            classes              │
+│─────────────────────────────────│   │─────────────────────────────────│
+│ id (uuid) PK                    │───│ id (uuid) PK                    │
+│ role (student | instructor)     │   │ instructor_id (uuid) FK         │
+│ display_name                    │   │ name                            │
+└─────────────────────────────────┘   │ join_code (unique)              │
+          │                           └─────────────────────────────────┘
+          │                                     │
+          ▼                                     ▼
+┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+│          enrollments            │   │          assignments            │
+│─────────────────────────────────│   │─────────────────────────────────│
+│ student_id (uuid) PK, FK        │   │ id (uuid) PK                    │
+│ class_id (uuid) PK, FK          │   │ class_id (uuid) FK              │
+│ enrolled_at (timestamptz)       │   │ title                           │
+│ grade (numeric)  ← AUTO         │   │ starter_files (jsonb)           │
+└─────────────────────────────────┘   └─────────────────────────────────┘
+                                                │
+                                                ▼
+┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+│         file_snapshots          │   │          submissions            │
+│─────────────────────────────────│   │─────────────────────────────────│
+│ id (uuid) PK                    │   │ id (uuid) PK                    │
+│ user_id (uuid) FK               │   │ assignment_id (uuid) FK         │
+│ class_id (uuid) FK              │   │ student_id (uuid) FK            │
+│ file_path                       │   │ score                           │
+│ content_hash (SHA-256)          │   │ feedback                        │
+│ content (text)                  │   └─────────────────────────────────┘
+└─────────────────────────────────┘             │
+          │                                     │
+          └───────────────┬─────────────────────┘
+                          ▼
+             ┌──────────────────────────┐
+             │   submission_snapshots   │
+             │──────────────────────────│
+             │ submission_id (uuid) FK  │
+             │ snapshot_id (uuid) FK    │
+             └──────────────────────────┘
+
 ```
+
+
+
 
 ---
 

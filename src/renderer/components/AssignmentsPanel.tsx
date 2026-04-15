@@ -182,17 +182,20 @@ const AssignmentsPanel: React.FC<AssignmentsPanelProps> = ({
       // 3. Force-save a fresh snapshot for each file and collect the snapshot IDs
       const snapshotIds: string[] = [];
       for (const file of files) {
+        // listAllFiles returns paths relative to assignmentPath, so we compute the full path
+        const fullPath = `${assignmentPath}/${file.path}`;
+
         // Save/update the cloud snapshot for this file
-        await saveSnapshot(file.path, file.content);
+        await saveSnapshot(fullPath, file.content);
 
         // Fetch the snapshot we just saved (latest by saved_at for this path/user/class)
-        const relativePath = file.path.replace(rootPath + "/", "");
+        const fetchPath = `${dirName}/${file.path}`;
         const { data: snap } = await supabase
           .from("file_snapshots")
           .select("id")
           .eq("user_id", user.id)
           .eq("class_id", currentClass.id)
-          .eq("file_path", relativePath)
+          .eq("file_path", fetchPath)
           .order("saved_at", { ascending: false })
           .limit(1)
           .single();
